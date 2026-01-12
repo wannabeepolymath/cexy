@@ -1,11 +1,11 @@
-
+use crate::Orderbook::orderbook;
 
 pub struct Engine {
-    pub orderbook: Vec<Orderbook>,
+    pub orderbook: Orderbook,
 }
 
 impl Engine {
     pub fn new() -> Self {
-        Self { orderbook: Vec::new() }
+        Self { orderbook: Orderbook::new() }
     }
 }
