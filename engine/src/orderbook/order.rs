@@ -1,6 +1,6 @@
 use crate::orderbook::{order_type::OrderType, side::Side, types::{OrderId, Price, Quantity}};
 use thiserror::Error;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::collections::VecDeque;
 
 #[derive(Debug, Error)]
@@ -82,9 +82,9 @@ impl Order {
     }
 }
 
-pub type OrderPointer =  Arc<RwLock<Order>>;
+pub type OrderPointer =  Order; // rethink what to do, latency, leaving this like this for now
 pub type OrderList = VecDeque<OrderPointer>;
 
 pub fn create_order(order: Order) -> OrderPointer {
-    Arc::new(RwLock::new(order))
+    order
 }
