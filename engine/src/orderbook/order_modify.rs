@@ -1,4 +1,4 @@
-use crate::orderbook::{order::{OrderPointer, Order, create_order}, order_type::OrderType, side::Side, types::{OrderId, Price, Quantity}};
+use crate::orderbook::{order::{Order}, order_type::OrderType, side::Side, types::{OrderId, Price, Quantity}};
 
 
 #[derive(Debug, Clone)]
@@ -35,13 +35,13 @@ impl OrderModify {
         self.quantity
     }
 
-    pub fn modify(&self, order_type: OrderType) -> OrderPointer {
-        create_order(Order::new(
+    pub fn modify(&self, order_type: OrderType) -> Order {
+        Order::new(
             self.order_id, 
             self.side,
             order_type,
             self.price,
             self.quantity,
-        ))
+        )
     }
 }

@@ -1,8 +1,7 @@
 use std::collections::{BTreeMap, VecDeque, HashMap};
 use crate::orderbook::types::{Price, Quantity, OrderId};
 use crate::orderbook::side::Side;
-use crate::orderbook::order::OrderPointer;
-use crate::orderbook::trade::Trades;
+use crate::orderbook::order::Order;
 
 #[derive(Debug, Clone, Default)]
 struct LevelData {
@@ -11,13 +10,12 @@ struct LevelData {
 }
 
 struct OrderEntry {
-    order: OrderPointer,
+    order: Order,
 }
 
-type OrderList = VecDeque<OrderPointer>;
+type OrderList = VecDeque<Order>;
 
 pub struct Orderbook {
-    data: HashMap<Price, LevelData>,
     orders: HashMap<OrderId, OrderEntry>,
     bids: BTreeMap<Price, OrderList>,
     asks: BTreeMap<Price, OrderList>,
@@ -26,7 +24,6 @@ pub struct Orderbook {
 impl Orderbook {
     pub fn new() -> Self {
         Self {
-            data: HashMap::new(),
             orders: HashMap::new(),
             bids: BTreeMap::new(),
             asks: BTreeMap::new(),
@@ -49,28 +46,6 @@ impl Orderbook {
                 let best_bid = *self.bids.keys().next_back().unwrap();
                 price <= best_bid
             }
-        }
-    }
-    
-    pub fn match_order(&self) -> Trades {
-        let mut trades = Vec::with_capacity(self.orders.len());
-
-        loop {
-            if self.bids.is_empty() || self.asks.is_empty() {
-                break;
-            }
-            
-            let ask_price = *self.asks.keys().next().unwrap();
-            let bid_price = *self.bids.keys().next_back().unwrap();
-
-            if bid_price < ask_price {
-                break;
-            }
-
-            loop {
-                let quantity = min(self.bids.get(&bid_price).unwrap().quantity, self.asks.get(&ask_price).unwrap().quantity);
-
-
         }
     }
 }
