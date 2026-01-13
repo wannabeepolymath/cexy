@@ -1,10 +1,9 @@
-use std::cmp::min;
 use std::collections::{BTreeMap, VecDeque, HashMap};
 use crate::orderbook::types::{Price, Quantity, OrderId};
 use crate::orderbook::side::Side;
 use crate::orderbook::order_type::OrderType;
 use crate::orderbook::order::{Order};
-use crate::orderbook::trade::Trades;
+use crate::orderbook::trade::{Trade, Trades, TradeInfo};
 
 #[derive(Debug, Clone, Default)]
 struct LevelData {
@@ -60,6 +59,72 @@ impl Orderbook {
         }
     }
 
+    fn match_orders(&mut self) -> Trades {
+        let mut trades = Vec::new();
+
+        loop {
+            let Some(bid_price) = self.best_bid() else { break };
+            let Some(ask_price) = self.best_ask() else { break };
+
+            if bid_price < ask_price {
+                break;
+            }
+
+            loop {
+                let bid_id = self.bids.get(&bid_price).and_then(|ids| ids.front().copied());
+                let ask_id = self.asks.get(&ask_price).and_then(|ids| ids.front().copied());
+
+                let (Some(bid_id), Some(ask_id)) = (bid_id, ask_id) else {
+                    break;
+                };
+
+                let quantity = {
+                    let bid = self.orders.get(&bid_id).unwrap();
+                    let ask = self.orders.get(&ask_id).unwrap();
+                    std::cmp::min(bid.remaining_quantity(), ask.remaining_quantity())
+                };
+
+                self.orders.get_mut(&bid_id).unwrap().fill(quantity).unwrap();
+                self.orders.get_mut(&ask_id).unwrap().fill(quantity).unwrap();
+
+                // Check if filled
+                let bid_filled = self.orders.get(&bid_id).unwrap().is_filled();
+                let ask_filled = self.orders.get(&ask_id).unwrap().is_filled();
+                let bid_price_val = self.orders.get(&bid_id).unwrap().price();
+                let ask_price_val = self.orders.get(&ask_id).unwrap().price();
+
+                // Remove filled orders from queue
+                if bid_filled {
+                    if let Some(ids) = self.bids.get_mut(&bid_price) {
+                        ids.pop_front();
+                    }
+                    self.orders.remove(&bid_id);
+                }
+
+                if ask_filled {
+                    if let Some(ids) = self.asks.get_mut(&ask_price) {
+                        ids.pop_front();
+                    }
+                    self.orders.remove(&ask_id);
+                }
+
+                trades.push(Trade::new(
+                    TradeInfo::new(bid_id, bid_price_val, quantity),
+                    TradeInfo::new(ask_id, ask_price_val, quantity),
+                ));
+            }
+
+            // Clean up empty levels
+            if self.bids.get(&bid_price).map_or(true, |ids| ids.is_empty()) {
+                self.bids.remove(&bid_price);
+            }
+
+            if self.asks.get(&ask_price).map_or(true, |ids| ids.is_empty()) {
+                self.asks.remove(&ask_price);
+            }
+        }
+        trades
+    }
 
     pub fn add_order(&mut self, order: Order) {
         let order_id = order.order_id;
@@ -81,7 +146,7 @@ impl Orderbook {
             }
         }
 
-        // self.match_order();
+        self.match_orders();
     }
 
     pub fn cancel_order(&mut self, order_id: OrderId) {
