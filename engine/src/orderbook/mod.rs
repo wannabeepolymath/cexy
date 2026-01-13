@@ -6,3 +6,6 @@ pub mod orderbook;
 pub mod side;
 pub mod trade;
 pub mod types;
+
+#[cfg(test)]
+mod tests;
