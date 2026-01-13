@@ -1,6 +1,5 @@
 use crate::orderbook::{order_type::OrderType, side::Side, types::{OrderId, Price, Quantity}};
 use thiserror::Error;
-use std::collections::VecDeque;
 
 #[derive(Debug, Error)]
 pub enum OrderError {
@@ -10,7 +9,7 @@ pub enum OrderError {
     InvalidPriceAdjustment(OrderId),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct Order {
     pub order_id: OrderId,
     pub side: Side,
@@ -70,15 +69,11 @@ impl Order {
         self.remaining_quantity == 0
     }
 
-    pub fn fill(&mut self, quantity: Quantity) {
-
+    pub fn fill(&mut self, quantity: Quantity) -> Result<(), OrderError> {
         if quantity > self.remaining_quantity {
-            eprintln!("Cannot fill more than the remaining quantity: {} > {}", quantity, self.remaining_quantity);
-            return;
+            return Err(OrderError::OverFill(self.order_id));
         }
-
         self.remaining_quantity -= quantity;
+        Ok(())
     }
 }
-
-pub type OrderList = VecDeque<Order>;
