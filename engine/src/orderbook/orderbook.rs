@@ -4,6 +4,8 @@ use crate::orderbook::side::Side;
 use crate::orderbook::order_type::OrderType;
 use crate::orderbook::order::{Order};
 use crate::orderbook::trade::{Trade, Trades, TradeInfo};
+use crate::orderbook::order_modify::OrderModify;
+use crate::orderbook::level_info::{OrderbookLevelInfo, LevelInfo, LevelInfos};
 
 #[derive(Debug, Clone, Default)]
 struct LevelData {
@@ -126,13 +128,13 @@ impl Orderbook {
         trades
     }
 
-    pub fn add_order(&mut self, order: Order) {
+    pub fn add_order(&mut self, order: Order) -> Trades {
         let order_id = order.order_id;
         if self.orders.contains_key(&order_id) {
-            return;
+            return Trades::new();
         }
         if order.order_type() == OrderType::FillAndKill && !self.can_match(order.side, order.price) {
-            return;
+            return Trades::new();
         }
 
         self.orders.insert(order_id, order);
@@ -146,7 +148,7 @@ impl Orderbook {
             }
         }
 
-        self.match_orders();
+        self.match_orders()
     }
 
     pub fn cancel_order(&mut self, order_id: OrderId) {
@@ -163,5 +165,55 @@ impl Orderbook {
                 price_levels.remove(&order.price);
             }
         }
+    }
+
+    pub fn modify_order(&mut self, order_modify: OrderModify) -> Trades {
+        let Some(order) = self.orders.get(&order_modify.order_id()) else {
+            return Trades::new();
+        };
+
+        let order_type = order.order_type();
+        
+        self.cancel_order(order_modify.order_id());
+        self.add_order(order_modify.modify(order_type))
+    }
+
+    pub fn size(&self) -> usize {
+        self.orders.len()
+    }
+
+    /// Returns the current state of the orderbook.
+    pub fn get_order_infos(&self) -> OrderbookLevelInfo {
+        let mut bid_infos: LevelInfos = Vec::with_capacity(self.bids.len());
+        let mut ask_infos: LevelInfos = Vec::with_capacity(self.asks.len());
+
+        // Bids - highest price first (iterate in reverse)
+        for (&price, order_ids) in self.bids.iter().rev() {
+            let quantity: Quantity = order_ids
+                .iter()
+                .filter_map(|id| self.orders.get(id))
+                .map(|o| o.remaining_quantity())
+                .sum();
+            bid_infos.push(LevelInfo::new(price, quantity));
+        }
+
+        // Asks - lowest price first (iterate forward)
+        for (&price, order_ids) in self.asks.iter() {
+            let quantity: Quantity = order_ids
+                .iter()
+                .filter_map(|id| self.orders.get(id))
+                .map(|o| o.remaining_quantity())
+                .sum();
+            ask_infos.push(LevelInfo::new(price, quantity));
+        }
+
+        OrderbookLevelInfo::new(bid_infos, ask_infos)
+    }
+}
+
+
+impl Default for Orderbook {
+    fn default() -> Self {
+        Self::new()
     }
 }
