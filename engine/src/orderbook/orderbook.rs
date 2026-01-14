@@ -1,5 +1,5 @@
 use std::collections::{BTreeMap, VecDeque, HashMap};
-use crate::orderbook::types::{Price, Quantity, OrderId};
+use crate::orderbook::types::{Price, Quantity, OrderId, OrderIds};
 use crate::orderbook::side::Side;
 use crate::orderbook::order_type::OrderType;
 use crate::orderbook::order::{Order};
@@ -11,10 +11,6 @@ use crate::orderbook::level_info::{OrderbookLevelInfo, LevelInfo, LevelInfos};
 struct LevelData {
     quantity: Quantity,
     count: u64,
-}
-
-struct OrderEntry {
-    order: Order,
 }
 
 type OrderIdList = VecDeque<OrderId>;
@@ -40,6 +36,13 @@ impl Orderbook {
 
     pub fn best_ask(&self) -> Option<Price> {
         self.asks.keys().next().copied()
+    }
+
+    pub fn worst_bid(&self) -> Option<Price> {
+        self.bids.keys().next().copied()
+    }
+    pub fn worst_ask(&self) -> Option<Price> {
+        self.asks.keys().next_back().copied()
     }
 
     pub fn can_match(&self, side: Side, price: Price) -> bool {
@@ -133,6 +136,21 @@ impl Orderbook {
         if self.orders.contains_key(&order_id) {
             return Trades::new();
         }
+
+        if order.order_type() == OrderType::Market {
+            if order.side == Side::Buy && self.worst_ask().is_some() {
+                let worst_ask = self.worst_ask().unwrap();
+                return self.good_till_cancel(worst_ask);
+                
+            } else if order.side == Side::Sell && self.worst_bid().is_some() {
+                let worst_bid = self.worst_bid().unwrap();
+                return self.good_till_cancel(worst_bid);
+                
+            } else {
+                return Trades::new();
+            }
+        }
+
         if order.order_type() == OrderType::FillAndKill && !self.can_match(order.side, order.price) {
             return Trades::new();
         }
@@ -152,7 +170,16 @@ impl Orderbook {
     }
 
     pub fn cancel_order(&mut self, order_id: OrderId) {
-        let Some(order) = self.orders.remove(&order_id) else {return};
+            self.cancel_order_internal(order_id);
+    }
+
+    pub fn cancel_orders(&mut self, order_ids: OrderIds) {
+        for order_id in order_ids {
+            self.cancel_order_internal(order_id);
+        }
+    }
+    fn cancel_order_internal(&mut self, order_id: OrderId) {
+        let Some(order) = self.orders.remove(&order_id) else { return };
 
         let price_levels = match order.side {
             Side::Buy => &mut self.bids,
@@ -208,6 +235,12 @@ impl Orderbook {
         }
 
         OrderbookLevelInfo::new(bid_infos, ask_infos)
+    }
+
+    pub fn good_till_cancel(&mut self, price: Price) -> Trades {
+        let mut trades = Vec::new();
+        //next todo
+        trades
     }
 }
 

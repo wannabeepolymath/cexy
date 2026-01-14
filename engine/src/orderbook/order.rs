@@ -1,4 +1,4 @@
-use crate::orderbook::{order_type::OrderType, side::Side, types::{OrderId, Price, Quantity}};
+use crate::orderbook::{order_type::OrderType, side::Side, types::{OrderId, Price, Quantity, INVALID_PRICE}};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -32,6 +32,22 @@ impl Order {
             side,
             order_type,
             price,
+            initial_quantity: quantity,
+            remaining_quantity: quantity,
+        }
+    }
+
+    pub fn market(
+        order_id: OrderId,
+        side: Side,
+        order_type: OrderType,
+        quantity: Quantity,
+    ) -> Self {
+        Self {
+            order_id,
+            side,
+            order_type,
+            price: INVALID_PRICE,
             initial_quantity: quantity,
             remaining_quantity: quantity,
         }
