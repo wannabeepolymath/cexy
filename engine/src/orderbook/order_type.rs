@@ -1,7 +1,7 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OrderType {
     Market,
-    Limit,
+    GoodTillCancel,
     FillAndKill,
     FillOrKill,
     PostOnly,

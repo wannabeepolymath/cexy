@@ -166,3 +166,9 @@ Rejects if insufficient
      - `add_orderbook()`
      - `create_order()`: Adds order to the orderbook after verifying user balances.
      - `update_order()`
+
+
+**AI alert**
+```
+tests are written using AI
+```

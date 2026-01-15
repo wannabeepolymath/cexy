@@ -92,4 +92,13 @@ impl Order {
         self.remaining_quantity -= quantity;
         Ok(())
     }
+
+    pub fn to_good_till_cancel(&mut self, price: Price) -> Result<(), OrderError> {
+        if self.order_type != OrderType::Market {
+            return Err(OrderError::InvalidPriceAdjustment(self.order_id));
+        }
+        self.order_type = OrderType::GoodTillCancel;
+        self.price = price;
+        Ok(())
+    }
 }

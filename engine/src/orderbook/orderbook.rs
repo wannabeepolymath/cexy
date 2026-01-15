@@ -131,7 +131,7 @@ impl Orderbook {
         trades
     }
 
-    pub fn add_order(&mut self, order: Order) -> Trades {
+    pub fn add_order(&mut self, mut order: Order) -> Trades {
         let order_id = order.order_id;
         if self.orders.contains_key(&order_id) {
             return Trades::new();
@@ -140,11 +140,11 @@ impl Orderbook {
         if order.order_type() == OrderType::Market {
             if order.side == Side::Buy && self.worst_ask().is_some() {
                 let worst_ask = self.worst_ask().unwrap();
-                return self.good_till_cancel(worst_ask);
+                order.to_good_till_cancel(worst_ask).ok();
                 
             } else if order.side == Side::Sell && self.worst_bid().is_some() {
                 let worst_bid = self.worst_bid().unwrap();
-                return self.good_till_cancel(worst_bid);
+                order.to_good_till_cancel(worst_bid).ok();
                 
             } else {
                 return Trades::new();
@@ -236,12 +236,7 @@ impl Orderbook {
 
         OrderbookLevelInfo::new(bid_infos, ask_infos)
     }
-
-    pub fn good_till_cancel(&mut self, price: Price) -> Trades {
-        let mut trades = Vec::new();
-        //next todo
-        trades
-    }
+    
 }
 
 

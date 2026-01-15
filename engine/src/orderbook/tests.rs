@@ -10,7 +10,7 @@ mod tests {
     use super::*;
 
     fn make_limit_order(id: OrderId, side: Side, price: Price, quantity: Quantity) -> Order {
-        Order::new(id, side, OrderType::Limit, price, quantity)
+        Order::new(id, side, OrderType::GoodTillCancel, price, quantity)
     }
 
     fn make_fok_order(id: OrderId, side: Side, price: Price, quantity: Quantity) -> Order {
