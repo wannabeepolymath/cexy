@@ -7,6 +7,12 @@ use crate::orderbook::trade::{Trade, Trades, TradeInfo};
 use crate::orderbook::order_modify::OrderModify;
 use crate::orderbook::level_info::{OrderbookLevelInfo, LevelInfo, LevelInfos};
 
+#[derive(Debug, Clone, PartialEq,  Default)]
+enum LevelAction{
+    Add,
+    Remove,
+    Match
+}
 #[derive(Debug, Clone, Default)]
 struct LevelData {
     quantity: Quantity,
@@ -16,6 +22,7 @@ struct LevelData {
 type OrderIdList = VecDeque<OrderId>;
 
 pub struct Orderbook {
+    data: HashMap<Price, LevelData>,
     orders: HashMap<OrderId, Order>,
     bids: BTreeMap<Price, OrderIdList>,
     asks: BTreeMap<Price, OrderIdList>
@@ -24,6 +31,7 @@ pub struct Orderbook {
 impl Orderbook {
     pub fn new() -> Self {
         Self {
+            data: HashMap::new(),
             orders: HashMap::new(),
             bids: BTreeMap::new(),
             asks: BTreeMap::new(),
@@ -117,15 +125,19 @@ impl Orderbook {
                     TradeInfo::new(bid_id, bid_price_val, quantity),
                     TradeInfo::new(ask_id, ask_price_val, quantity),
                 ));
+                self.on_order_matched(bid_price_val, quantity, bid_filled);
+                self.on_order_matched(ask_price_val, quantity, ask_filled);
             }
 
             // Clean up empty levels
             if self.bids.get(&bid_price).map_or(true, |ids| ids.is_empty()) {
                 self.bids.remove(&bid_price);
+                self.data.remove(&bid_price);
             }
 
             if self.asks.get(&ask_price).map_or(true, |ids| ids.is_empty()) {
                 self.asks.remove(&ask_price);
+                self.data.remove(&ask_price);
             }
         }
         trades
@@ -151,7 +163,11 @@ impl Orderbook {
             }
         }
 
-        if order.order_type() == OrderType::FillAndKill && !self.can_match(order.side, order.price) {
+        let side = order.side();
+        let price = order.price();
+        let quantity = order.initial_quantity();
+
+        if order.order_type() == OrderType::FillAndKill && !self.can_match(side, price) {
             return Trades::new();
         }
 
@@ -159,18 +175,19 @@ impl Orderbook {
 
         match order.side {
             Side::Buy => {
-                self.bids.entry(order.price).or_default().push_back(order_id);
+                self.bids.entry(price).or_default().push_back(order_id);
             }
             Side::Sell => {
-                self.asks.entry(order.price).or_default().push_back(order_id);
+                self.asks.entry(price).or_default().push_back(order_id);
             }
         }
+        self.on_order_added(price, quantity);
 
         self.match_orders()
     }
 
     pub fn cancel_order(&mut self, order_id: OrderId) {
-            self.cancel_order_internal(order_id);
+        self.cancel_order_internal(order_id);
     }
 
     pub fn cancel_orders(&mut self, order_ids: OrderIds) {
@@ -181,17 +198,22 @@ impl Orderbook {
     fn cancel_order_internal(&mut self, order_id: OrderId) {
         let Some(order) = self.orders.remove(&order_id) else { return };
 
-        let price_levels = match order.side {
+        let price = order.price();
+        let side = order.side();
+        let remaining = order.remaining_quantity();
+
+        let price_levels = match side {
             Side::Buy => &mut self.bids,
             Side::Sell => &mut self.asks,
         };
 
-        if let Some(order_ids) = price_levels.get_mut(&order.price) {
+        if let Some(order_ids) = price_levels.get_mut(&price) {
             order_ids.retain(|&id| id != order_id);
             if order_ids.is_empty() {
-                price_levels.remove(&order.price);
+                price_levels.remove(&price);
             }
         }
+        self.on_order_cancelled(price, remaining);
     }
 
     pub fn modify_order(&mut self, order_modify: OrderModify) -> Trades {
@@ -203,6 +225,46 @@ impl Orderbook {
         
         self.cancel_order(order_modify.order_id());
         self.add_order(order_modify.modify(order_type))
+    }
+
+
+    fn on_order_added(&mut self, price: Price, quantity: Quantity) {
+        self.update_level_data(price, quantity, LevelAction::Add);
+    }
+    fn on_order_cancelled(&mut self, price: Price, quantity: Quantity) {
+        self.update_level_data(price, quantity, LevelAction::Remove);
+    }
+    fn on_order_matched(&mut self, price: Price, quantity: Quantity, is_filled: bool) {
+        self.update_level_data(
+            price,
+            quantity,
+            if is_filled {
+                LevelAction::Remove
+            } else {
+                LevelAction::Match
+            }
+        )
+    }
+    fn update_level_data(&mut self, price: Price, quantity: Quantity, action: LevelAction) {
+        let data = self.data.entry(price).or_default();
+
+        match action {
+            LevelAction::Add => {
+                data.count = data.count.saturating_add(1);
+                data.quantity = data.quantity.saturating_add(quantity);
+            }
+            LevelAction::Remove => {
+                data.count = data.count.saturating_sub(1);
+                data.quantity = data.quantity.saturating_sub(quantity);
+            }
+            LevelAction::Match => {
+                data.quantity = data.quantity.saturating_sub(quantity);
+            }
+        }
+
+        if data.count == 0 {
+            self.data.remove(&price);
+        }
     }
 
     pub fn size(&self) -> usize {
@@ -235,6 +297,10 @@ impl Orderbook {
         }
 
         OrderbookLevelInfo::new(bid_infos, ask_infos)
+    }
+
+    fn prune_good_for_day_orders(&mut self) {
+        // GoodForDay orders, cex is open 24/7, so no opening/closing auctions
     }
     
 }
