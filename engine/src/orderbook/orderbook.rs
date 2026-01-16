@@ -7,7 +7,7 @@ use crate::orderbook::trade::{Trade, Trades, TradeInfo};
 use crate::orderbook::order_modify::OrderModify;
 use crate::orderbook::level_info::{OrderbookLevelInfo, LevelInfo, LevelInfos};
 
-#[derive(Debug, Clone, PartialEq,  Default)]
+#[derive(Debug, Clone, PartialEq)]
 enum LevelAction{
     Add,
     Remove,
@@ -51,6 +51,45 @@ impl Orderbook {
     }
     pub fn worst_ask(&self) -> Option<Price> {
         self.asks.keys().next_back().copied()
+    }
+
+    pub fn can_fully_fill(&self, side: Side, price: Price, mut quantity: Quantity) -> bool {
+        if self.can_match(side, price) { return false }
+
+        let levels = match side {
+            Side::Buy => &self.asks,
+            Side::Sell => &self.bids,
+        };
+
+        match side {
+            Side::Buy => {
+                for(&ask_price, order_ids) in levels.iter(){
+                    if ask_price > price { break; }
+
+                    let level_qty:Quantity = order_ids.iter()
+                        .filter_map(|id|{self.orders.get(id)})
+                        .map(|order| order.remaining_quantity())
+                        .sum();
+
+                    if quantity <= level_qty { return true }
+
+                    quantity -= quantity.saturating_sub(level_qty);
+                }
+            },
+            Side::Sell => {
+                for (&bid_price, order_ids) in levels.iter().rev() {
+                    if bid_price < price { break; }
+                    let level_qty: Quantity = order_ids.iter()
+                        .filter_map(|id| self.orders.get(id))
+                        .map(|o| o.remaining_quantity())
+                        .sum();
+
+                    if quantity <= level_qty { return true }
+                    quantity -= quantity.saturating_sub(level_qty);
+                }
+            }
+        }
+        false
     }
 
     pub fn can_match(&self, side: Side, price: Price) -> bool {
@@ -145,40 +184,55 @@ impl Orderbook {
 
     pub fn add_order(&mut self, mut order: Order) -> Trades {
         let order_id = order.order_id;
+        let side = order.side();
+        let price = order.price();
+        let quantity = order.initial_quantity();
+        let order_type = order.order_type();
+
         if self.orders.contains_key(&order_id) {
             return Trades::new();
         }
 
-        if order.order_type() == OrderType::Market {
-            if order.side == Side::Buy && self.worst_ask().is_some() {
-                let worst_ask = self.worst_ask().unwrap();
-                order.to_good_till_cancel(worst_ask).ok();
-                
-            } else if order.side == Side::Sell && self.worst_bid().is_some() {
-                let worst_bid = self.worst_bid().unwrap();
-                order.to_good_till_cancel(worst_bid).ok();
-                
-            } else {
+        if order_type == OrderType::Market {
+            let converted = match side {
+                Side::Buy => {
+                    if let Some(&worst_ask) = self.asks.keys().next_back() {
+                        order.to_good_till_cancel(worst_ask).ok();
+                        true
+                    } else {
+                        false
+                    }
+                }
+                Side::Sell => {
+                    if let Some(&worst_bid) = self.bids.keys().next() {
+                        order.to_good_till_cancel(worst_bid).ok();
+                        true
+                    } else {
+                        false
+                    }
+                }
+            };
+            if !converted {
                 return Trades::new();
             }
         }
 
-        let side = order.side();
-        let price = order.price();
-        let quantity = order.initial_quantity();
+        if order_type == OrderType::FillAndKill && !self.can_match(side, price) {
+            return Trades::new();
+        }
 
-        if order.order_type() == OrderType::FillAndKill && !self.can_match(side, price) {
+        if order_type == OrderType::FillOrKill && !self.can_fully_fill(side, price, quantity) {
             return Trades::new();
         }
 
         self.orders.insert(order_id, order);
 
-        match order.side {
+        match side {
             Side::Buy => {
-                self.bids.entry(price).or_default().push_back(order_id);
+                self.bids.entry(price).or_insert_with(VecDeque::new).push_back(order_id);
             }
             Side::Sell => {
-                self.asks.entry(price).or_default().push_back(order_id);
+                self.asks.entry(price).or_insert_with(VecDeque::new).push_back(order_id);
             }
         }
         self.on_order_added(price, quantity);
