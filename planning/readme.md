@@ -19,10 +19,10 @@
 - mataching engine orders
 ``` 
 Market
-Limit
+GoodTillCancel //remaining impl
 IOC
 FOK
-Post-Only
+Post-Only // remaining impl
 ```
 
 

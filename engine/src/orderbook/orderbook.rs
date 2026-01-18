@@ -139,7 +139,6 @@ impl Orderbook {
                 self.orders.get_mut(&bid_id).unwrap().fill(quantity).unwrap();
                 self.orders.get_mut(&ask_id).unwrap().fill(quantity).unwrap();
 
-                // Check if filled
                 let bid_filled = self.orders.get(&bid_id).unwrap().is_filled();
                 let ask_filled = self.orders.get(&ask_id).unwrap().is_filled();
                 let bid_price_val = self.orders.get(&bid_id).unwrap().price();
@@ -168,7 +167,6 @@ impl Orderbook {
                 self.on_order_matched(ask_price_val, quantity, ask_filled);
             }
 
-            // Clean up empty levels
             if self.bids.get(&bid_price).map_or(true, |ids| ids.is_empty()) {
                 self.bids.remove(&bid_price);
                 self.data.remove(&bid_price);
@@ -325,12 +323,10 @@ impl Orderbook {
         self.orders.len()
     }
 
-    /// Returns the current state of the orderbook.
     pub fn get_order_infos(&self) -> OrderbookLevelInfo {
         let mut bid_infos: LevelInfos = Vec::with_capacity(self.bids.len());
         let mut ask_infos: LevelInfos = Vec::with_capacity(self.asks.len());
 
-        // Bids - highest price first (iterate in reverse)
         for (&price, order_ids) in self.bids.iter().rev() {
             let quantity: Quantity = order_ids
                 .iter()
@@ -340,7 +336,6 @@ impl Orderbook {
             bid_infos.push(LevelInfo::new(price, quantity));
         }
 
-        // Asks - lowest price first (iterate forward)
         for (&price, order_ids) in self.asks.iter() {
             let quantity: Quantity = order_ids
                 .iter()
@@ -353,8 +348,8 @@ impl Orderbook {
         OrderbookLevelInfo::new(bid_infos, ask_infos)
     }
 
-    fn prune_good_for_day_orders(&mut self) {
-        // GoodForDay orders, cex is open 24/7, so no opening/closing auctions
+    fn prune_good_till_cancel(&mut self) {
+        // Goodtillcancel orders, cex is open 24/7, so no opening/closing auctions
     }
     
 }
