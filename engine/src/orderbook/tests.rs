@@ -13,8 +13,16 @@ mod tests {
         Order::new(id, side, OrderType::GoodTillCancel, price, quantity)
     }
 
-    fn make_fok_order(id: OrderId, side: Side, price: Price, quantity: Quantity) -> Order {
+    fn make_fak_order(id: OrderId, side: Side, price: Price, quantity: Quantity) -> Order {
         Order::new(id, side, OrderType::FillAndKill, price, quantity)
+    }
+
+    fn make_fok_order(id: OrderId, side: Side, price: Price, quantity: Quantity) -> Order {
+        Order::new(id, side, OrderType::FillOrKill, price, quantity)
+    }
+
+    fn make_market_order(id: OrderId, side: Side, quantity: Quantity) -> Order {
+        Order::market(id, side, OrderType::Market, quantity)
     }
 
     #[test]
@@ -258,7 +266,7 @@ mod tests {
         ob.add_order(make_limit_order(1, Side::Sell, 100, 10));
         
         // FAK buy at 95 can't match ask at 100
-        let trades = ob.add_order(make_fok_order(2, Side::Buy, 95, 10));
+        let trades = ob.add_order(make_fak_order(2, Side::Buy, 95, 10));
         
         assert!(trades.is_empty());
         assert_eq!(ob.size(), 1); // only the original ask
@@ -270,9 +278,86 @@ mod tests {
         ob.add_order(make_limit_order(1, Side::Sell, 100, 10));
         
         // FAK buy at 100 can match
-        let trades = ob.add_order(make_fok_order(2, Side::Buy, 100, 5));
+        let trades = ob.add_order(make_fak_order(2, Side::Buy, 100, 5));
         
         assert_eq!(trades.len(), 1);
+    }
+
+    #[test]
+    fn fill_and_kill_does_not_rest() {
+        let mut ob = Orderbook::new();
+        ob.add_order(make_limit_order(1, Side::Sell, 100, 5));
+
+        let trades = ob.add_order(make_fak_order(2, Side::Buy, 100, 10));
+
+        assert_eq!(trades.len(), 1);
+        assert_eq!(ob.size(), 0);
+        assert!(ob.best_bid().is_none());
+        assert!(ob.best_ask().is_none());
+    }
+
+    #[test]
+    fn fill_or_kill_rejected_when_insufficient_liquidity() {
+        let mut ob = Orderbook::new();
+        ob.add_order(make_limit_order(1, Side::Sell, 100, 5));
+
+        let trades = ob.add_order(make_fok_order(2, Side::Buy, 100, 10));
+
+        assert!(trades.is_empty());
+        assert_eq!(ob.size(), 1);
+        assert_eq!(ob.best_ask(), Some(100));
+    }
+
+    #[test]
+    fn fill_or_kill_fills_when_enough_liquidity() {
+        let mut ob = Orderbook::new();
+        ob.add_order(make_limit_order(1, Side::Sell, 100, 5));
+        ob.add_order(make_limit_order(2, Side::Sell, 101, 5));
+
+        let trades = ob.add_order(make_fok_order(3, Side::Buy, 101, 10));
+
+        assert_eq!(trades.len(), 2);
+        assert_eq!(ob.size(), 0);
+    }
+
+    #[test]
+    fn post_only_rejected_if_would_cross() {
+        let mut ob = Orderbook::new();
+        ob.add_order(make_limit_order(1, Side::Sell, 100, 10));
+
+        let post_only = Order::new(2, Side::Buy, OrderType::PostOnly, 100, 5);
+        let trades = ob.add_order(post_only);
+
+        assert!(trades.is_empty());
+        assert_eq!(ob.size(), 1);
+        assert_eq!(ob.best_ask(), Some(100));
+    }
+
+    #[test]
+    fn post_only_accepted_if_not_crossing() {
+        let mut ob = Orderbook::new();
+        ob.add_order(make_limit_order(1, Side::Sell, 100, 10));
+
+        let post_only = Order::new(2, Side::Buy, OrderType::PostOnly, 99, 5);
+        let trades = ob.add_order(post_only);
+
+        assert!(trades.is_empty());
+        assert_eq!(ob.size(), 2);
+        assert_eq!(ob.best_bid(), Some(99));
+        assert_eq!(ob.best_ask(), Some(100));
+    }
+
+    #[test]
+    fn market_order_does_not_rest() {
+        let mut ob = Orderbook::new();
+        ob.add_order(make_limit_order(1, Side::Sell, 100, 5));
+
+        let trades = ob.add_order(make_market_order(2, Side::Buy, 10));
+
+        assert_eq!(trades.len(), 1);
+        assert_eq!(ob.size(), 0);
+        assert!(ob.best_bid().is_none());
+        assert!(ob.best_ask().is_none());
     }
 
     #[test]

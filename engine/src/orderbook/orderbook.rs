@@ -54,7 +54,9 @@ impl Orderbook {
     }
 
     pub fn can_fully_fill(&self, side: Side, price: Price, mut quantity: Quantity) -> bool {
-        if self.can_match(side, price) { return false }
+        if !self.can_match(side, price) {
+            return false;
+        }
 
         let levels = match side {
             Side::Buy => &self.asks,
@@ -71,9 +73,11 @@ impl Orderbook {
                         .map(|order| order.remaining_quantity())
                         .sum();
 
-                    if quantity <= level_qty { return true }
+                    if quantity <= level_qty {
+                        return true;
+                    }
 
-                    quantity -= quantity.saturating_sub(level_qty);
+                    quantity = quantity.saturating_sub(level_qty);
                 }
             },
             Side::Sell => {
@@ -84,8 +88,10 @@ impl Orderbook {
                         .map(|o| o.remaining_quantity())
                         .sum();
 
-                    if quantity <= level_qty { return true }
-                    quantity -= quantity.saturating_sub(level_qty);
+                    if quantity <= level_qty {
+                        return true;
+                    }
+                    quantity = quantity.saturating_sub(level_qty);
                 }
             }
         }
@@ -183,11 +189,16 @@ impl Orderbook {
     pub fn add_order(&mut self, mut order: Order) -> Trades {
         let order_id = order.order_id;
         let side = order.side();
-        let price = order.price();
+        let mut price = order.price();
         let quantity = order.initial_quantity();
         let order_type = order.order_type();
+        let is_immediate_or_cancel = matches!(order_type, OrderType::FillAndKill | OrderType::Market);
 
         if self.orders.contains_key(&order_id) {
+            return Trades::new();
+        }
+
+        if order_type == OrderType::PostOnly && self.can_match(side, price) {
             return Trades::new();
         }
 
@@ -213,6 +224,7 @@ impl Orderbook {
             if !converted {
                 return Trades::new();
             }
+            price = order.price();
         }
 
         if order_type == OrderType::FillAndKill && !self.can_match(side, price) {
@@ -235,7 +247,13 @@ impl Orderbook {
         }
         self.on_order_added(price, quantity);
 
-        self.match_orders()
+        let trades = self.match_orders();
+
+        if is_immediate_or_cancel && self.orders.contains_key(&order_id) {
+            self.cancel_order_internal(order_id);
+        }
+
+        trades
     }
 
     pub fn cancel_order(&mut self, order_id: OrderId) {
