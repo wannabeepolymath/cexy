@@ -1,3 +1,4 @@
+use crate::commands::InstrumentId;
 use crate::orderbook::side::Side;
 use crate::orderbook::types::{OrderId, Price, Quantity};
 
@@ -8,7 +9,7 @@ pub struct Trade {
     maker_order_id: OrderId,
     taker_order_id: OrderId,
     maker_side: Side,
-    instrument_id: u32,
+    instrument_id: InstrumentId,
     seq: u64,
 }
 
@@ -19,7 +20,7 @@ impl Trade {
         maker_order_id: OrderId,
         taker_order_id: OrderId,
         maker_side: Side,
-        instrument_id: u32,
+        instrument_id: InstrumentId,
         seq: u64,
     ) -> Self {
         Self {
@@ -53,7 +54,7 @@ impl Trade {
         self.maker_side
     }
 
-    pub fn instrument_id(&self) -> u32 {
+    pub fn instrument_id(&self) -> InstrumentId {
         self.instrument_id
     }
 

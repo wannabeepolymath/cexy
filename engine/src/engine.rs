@@ -14,7 +14,7 @@ pub struct Engine {
 
 impl Engine {
     pub fn new() -> Self {
-        Self { orderbook: Orderbook::new() }
+        Self { orderbook: Orderbook::new(0) }
     }
 
     pub fn place_order(&mut self, order: Order) -> PlaceOrderResult {

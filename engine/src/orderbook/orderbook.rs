@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, VecDeque, HashMap};
 use crate::commands::{
-    CancelOrderResult, CancelOrdersSummary, ModifyOrderReject, ModifyOrderResult, ModifyOrderSuccess,
-    PlaceOrderReject, PlaceOrderResult, PlaceOrderSuccess,
+    CancelOrderResult, CancelOrdersSummary, InstrumentId, ModifyOrderReject, ModifyOrderResult,
+    ModifyOrderSuccess, PlaceOrderReject, PlaceOrderResult, PlaceOrderSuccess,
 };
 use crate::orderbook::types::{Price, Quantity, OrderId, OrderIds};
 use crate::orderbook::side::Side;
@@ -26,6 +26,7 @@ struct LevelData {
 type OrderIdList = VecDeque<OrderId>;
 
 pub struct Orderbook {
+    instrument_id: InstrumentId,
     data: HashMap<Price, LevelData>,
     orders: HashMap<OrderId, Order>,
     bids: BTreeMap<Price, OrderIdList>,
@@ -34,14 +35,19 @@ pub struct Orderbook {
 }
 
 impl Orderbook {
-    pub fn new() -> Self {
+    pub fn new(instrument_id: InstrumentId) -> Self {
         Self {
+            instrument_id,
             data: HashMap::new(),
             orders: HashMap::new(),
             bids: BTreeMap::new(),
             asks: BTreeMap::new(),
             next_trade_seq: 0,
         }
+    }
+
+    pub fn instrument_id(&self) -> InstrumentId {
+        self.instrument_id
     }
 
     pub fn best_bid(&self) -> Option<Price> {
@@ -125,7 +131,7 @@ impl Orderbook {
 
     fn match_orders(&mut self, taker_order_id: OrderId, taker_side: Side) -> Trades {
         let mut trades = Vec::new();
-        const UNKNOWN_INSTRUMENT_ID: u32 = 0;
+        let instrument_id = self.instrument_id;
 
         loop {
             if !self.orders.contains_key(&taker_order_id) {
@@ -189,7 +195,7 @@ impl Orderbook {
                     maker_order_id,
                     taker_order_id,
                     maker_side,
-                    UNKNOWN_INSTRUMENT_ID,
+                    instrument_id,
                     seq,
                 ));
                 self.on_order_matched(bid_price_val, quantity, bid_filled);
@@ -409,11 +415,4 @@ impl Orderbook {
     //     // Goodtillcancel orders, cex is open 24/7, so no opening/closing auctions
     // }
     
-}
-
-
-impl Default for Orderbook {
-    fn default() -> Self {
-        Self::new()
-    }
 }

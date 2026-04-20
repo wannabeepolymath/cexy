@@ -121,7 +121,7 @@ fn bench_orderbook_add_limit(c: &mut Criterion) {
     group.bench_function("add_limit_order", |b| {
         b.iter_batched(
             || {
-                let mut book = Orderbook::new();
+                let mut book = Orderbook::new(0);
                 let next_id = seed_book(
                     &mut book,
                     1,
@@ -149,7 +149,7 @@ fn bench_orderbook_cancel(c: &mut Criterion) {
     group.bench_function("cancel_order", |b| {
         b.iter_batched(
             || {
-                let mut book = Orderbook::new();
+                let mut book = Orderbook::new(0);
                 let target_id = 1;
                 book.add_order(make_limit_order(
                     target_id,
@@ -184,7 +184,7 @@ fn bench_orderbook_modify(c: &mut Criterion) {
     group.bench_function("modify_order", |b| {
         b.iter_batched(
             || {
-                let mut book = Orderbook::new();
+                let mut book = Orderbook::new(0);
                 let target_id = 1;
                 book.add_order(make_limit_order(
                     target_id,
@@ -225,7 +225,7 @@ fn bench_orderbook_cross_spread(c: &mut Criterion) {
     group.bench_function("cross_spread_match", |b| {
         b.iter_batched(
             || {
-                let mut book = Orderbook::new();
+                let mut book = Orderbook::new(0);
                 let next_id = seed_book(
                     &mut book,
                     1,
@@ -254,7 +254,7 @@ fn bench_orderbook_cross_spread(c: &mut Criterion) {
 }
 
 fn bench_orderbook_top_of_book(c: &mut Criterion) {
-    let mut book = Orderbook::new();
+    let mut book = Orderbook::new(0);
     let next_id = seed_book(
         &mut book,
         1,
@@ -287,7 +287,7 @@ fn bench_orderbook_top_of_book(c: &mut Criterion) {
 }
 
 fn bench_orderbook_snapshot(c: &mut Criterion) {
-    let mut book = Orderbook::new();
+    let mut book = Orderbook::new(0);
     let next_id = seed_book(
         &mut book,
         1,
