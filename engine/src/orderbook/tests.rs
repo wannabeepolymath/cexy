@@ -8,6 +8,7 @@ use crate::orderbook::order_modify::OrderModify;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::{CancelOrderResult, ModifyOrderReject, PlaceOrderReject};
 
     fn make_limit_order(id: OrderId, side: Side, price: Price, quantity: Quantity) -> Order {
         Order::new(id, side, OrderType::GoodTillCancel, price, quantity)
@@ -44,8 +45,8 @@ mod tests {
         let mut ob = Orderbook::new();
         let order = make_limit_order(1, Side::Buy, 100, 10);
         
-        let trades = ob.add_order(order);
-        
+        let trades = ob.add_order(order).unwrap().trades;
+
         assert!(trades.is_empty());
         assert_eq!(ob.size(), 1);
         assert_eq!(ob.best_bid(), Some(100));
@@ -57,8 +58,8 @@ mod tests {
         let mut ob = Orderbook::new();
         let order = make_limit_order(1, Side::Sell, 100, 10);
         
-        let trades = ob.add_order(order);
-        
+        let trades = ob.add_order(order).unwrap().trades;
+
         assert!(trades.is_empty());
         assert_eq!(ob.size(), 1);
         assert!(ob.best_bid().is_none());
@@ -68,9 +69,9 @@ mod tests {
     #[test]
     fn add_multiple_bids_best_bid_is_highest() {
         let mut ob = Orderbook::new();
-        ob.add_order(make_limit_order(1, Side::Buy, 100, 10));
-        ob.add_order(make_limit_order(2, Side::Buy, 105, 10));
-        ob.add_order(make_limit_order(3, Side::Buy, 95, 10));
+        ob.add_order(make_limit_order(1, Side::Buy, 100, 10)).unwrap();
+        ob.add_order(make_limit_order(2, Side::Buy, 105, 10)).unwrap();
+        ob.add_order(make_limit_order(3, Side::Buy, 95, 10)).unwrap();
         
         assert_eq!(ob.size(), 3);
         assert_eq!(ob.best_bid(), Some(105));
@@ -79,9 +80,9 @@ mod tests {
     #[test]
     fn add_multiple_asks_best_ask_is_lowest() {
         let mut ob = Orderbook::new();
-        ob.add_order(make_limit_order(1, Side::Sell, 100, 10));
-        ob.add_order(make_limit_order(2, Side::Sell, 105, 10));
-        ob.add_order(make_limit_order(3, Side::Sell, 95, 10));
+        ob.add_order(make_limit_order(1, Side::Sell, 100, 10)).unwrap();
+        ob.add_order(make_limit_order(2, Side::Sell, 105, 10)).unwrap();
+        ob.add_order(make_limit_order(3, Side::Sell, 95, 10)).unwrap();
         
         assert_eq!(ob.size(), 3);
         assert_eq!(ob.best_ask(), Some(95));
@@ -90,10 +91,10 @@ mod tests {
     #[test]
     fn duplicate_order_id_rejected() {
         let mut ob = Orderbook::new();
-        ob.add_order(make_limit_order(1, Side::Buy, 100, 10));
-        let trades = ob.add_order(make_limit_order(1, Side::Buy, 105, 20));
-        
-        assert!(trades.is_empty());
+        ob.add_order(make_limit_order(1, Side::Buy, 100, 10)).unwrap();
+        let r = ob.add_order(make_limit_order(1, Side::Buy, 105, 20));
+
+        assert!(matches!(r, Err(PlaceOrderReject::DuplicateOrderId)));
         assert_eq!(ob.size(), 1);
         assert_eq!(ob.best_bid(), Some(100)); // original order remains
     }
@@ -101,8 +102,8 @@ mod tests {
     #[test]
     fn can_match_buy_against_ask() {
         let mut ob = Orderbook::new();
-        ob.add_order(make_limit_order(1, Side::Sell, 100, 10));
-        
+        ob.add_order(make_limit_order(1, Side::Sell, 100, 10)).unwrap();
+
         assert!(ob.can_match(Side::Buy, 100));  // equal price
         assert!(ob.can_match(Side::Buy, 105));  // higher price
         assert!(!ob.can_match(Side::Buy, 95));  // lower price
@@ -111,8 +112,8 @@ mod tests {
     #[test]
     fn can_match_sell_against_bid() {
         let mut ob = Orderbook::new();
-        ob.add_order(make_limit_order(1, Side::Buy, 100, 10));
-        
+        ob.add_order(make_limit_order(1, Side::Buy, 100, 10)).unwrap();
+
         assert!(ob.can_match(Side::Sell, 100)); // equal price
         assert!(ob.can_match(Side::Sell, 95));  // lower price
         assert!(!ob.can_match(Side::Sell, 105)); // higher price
@@ -128,10 +129,12 @@ mod tests {
     #[test]
     fn simple_match_full_fill() {
         let mut ob = Orderbook::new();
-        ob.add_order(make_limit_order(1, Side::Sell, 100, 10));
-        
-        let trades = ob.add_order(make_limit_order(2, Side::Buy, 100, 10));
-        
+        ob.add_order(make_limit_order(1, Side::Sell, 100, 10)).unwrap();
+
+        let trades = ob.add_order(make_limit_order(2, Side::Buy, 100, 10))
+            .unwrap()
+            .trades;
+
         assert_eq!(trades.len(), 1);
         assert_eq!(ob.size(), 0); // both orders fully filled
         assert!(ob.best_bid().is_none());
@@ -141,10 +144,12 @@ mod tests {
     #[test]
     fn partial_fill_bid_remaining() {
         let mut ob = Orderbook::new();
-        ob.add_order(make_limit_order(1, Side::Sell, 100, 5));
-        
-        let trades = ob.add_order(make_limit_order(2, Side::Buy, 100, 10));
-        
+        ob.add_order(make_limit_order(1, Side::Sell, 100, 5)).unwrap();
+
+        let trades = ob.add_order(make_limit_order(2, Side::Buy, 100, 10))
+            .unwrap()
+            .trades;
+
         assert_eq!(trades.len(), 1);
         assert_eq!(ob.size(), 1); // bid partially filled, remains
         assert_eq!(ob.best_bid(), Some(100));
@@ -154,10 +159,12 @@ mod tests {
     #[test]
     fn partial_fill_ask_remaining() {
         let mut ob = Orderbook::new();
-        ob.add_order(make_limit_order(1, Side::Sell, 100, 10));
-        
-        let trades = ob.add_order(make_limit_order(2, Side::Buy, 100, 5));
-        
+        ob.add_order(make_limit_order(1, Side::Sell, 100, 10)).unwrap();
+
+        let trades = ob.add_order(make_limit_order(2, Side::Buy, 100, 5))
+            .unwrap()
+            .trades;
+
         assert_eq!(trades.len(), 1);
         assert_eq!(ob.size(), 1); // ask partially filled, remains
         assert!(ob.best_bid().is_none());
@@ -167,11 +174,13 @@ mod tests {
     #[test]
     fn match_multiple_orders_at_same_level() {
         let mut ob = Orderbook::new();
-        ob.add_order(make_limit_order(1, Side::Sell, 100, 5));
-        ob.add_order(make_limit_order(2, Side::Sell, 100, 5));
-        
-        let trades = ob.add_order(make_limit_order(3, Side::Buy, 100, 10));
-        
+        ob.add_order(make_limit_order(1, Side::Sell, 100, 5)).unwrap();
+        ob.add_order(make_limit_order(2, Side::Sell, 100, 5)).unwrap();
+
+        let trades = ob.add_order(make_limit_order(3, Side::Buy, 100, 10))
+            .unwrap()
+            .trades;
+
         assert_eq!(trades.len(), 2); // matched both asks
         assert_eq!(ob.size(), 0);
     }
@@ -179,12 +188,14 @@ mod tests {
     #[test]
     fn match_across_price_levels() {
         let mut ob = Orderbook::new();
-        ob.add_order(make_limit_order(1, Side::Sell, 100, 5));
-        ob.add_order(make_limit_order(2, Side::Sell, 101, 5));
-        
+        ob.add_order(make_limit_order(1, Side::Sell, 100, 5)).unwrap();
+        ob.add_order(make_limit_order(2, Side::Sell, 101, 5)).unwrap();
+
         // Aggressive buy that sweeps both levels
-        let trades = ob.add_order(make_limit_order(3, Side::Buy, 101, 10));
-        
+        let trades = ob.add_order(make_limit_order(3, Side::Buy, 101, 10))
+            .unwrap()
+            .trades;
+
         assert_eq!(trades.len(), 2);
         assert_eq!(ob.size(), 0);
     }
@@ -192,11 +203,11 @@ mod tests {
     #[test]
     fn cancel_order_removes_from_book() {
         let mut ob = Orderbook::new();
-        ob.add_order(make_limit_order(1, Side::Buy, 100, 10));
+        ob.add_order(make_limit_order(1, Side::Buy, 100, 10)).unwrap();
         assert_eq!(ob.size(), 1);
-        
-        ob.cancel_order(1);
-        
+
+        assert_eq!(ob.cancel_order(1), CancelOrderResult::Cancelled);
+
         assert_eq!(ob.size(), 0);
         assert!(ob.best_bid().is_none());
     }
@@ -204,21 +215,21 @@ mod tests {
     #[test]
     fn cancel_nonexistent_order_is_noop() {
         let mut ob = Orderbook::new();
-        ob.add_order(make_limit_order(1, Side::Buy, 100, 10));
-        
-        ob.cancel_order(999); // doesn't exist
-        
+        ob.add_order(make_limit_order(1, Side::Buy, 100, 10)).unwrap();
+
+        assert_eq!(ob.cancel_order(999), CancelOrderResult::NotFound);
+
         assert_eq!(ob.size(), 1); // unchanged
     }
 
     #[test]
     fn cancel_order_cleans_up_empty_level() {
         let mut ob = Orderbook::new();
-        ob.add_order(make_limit_order(1, Side::Buy, 100, 10));
+        ob.add_order(make_limit_order(1, Side::Buy, 100, 10)).unwrap();
         ob.cancel_order(1);
-        
+
         // Add a different order - level should be clean
-        ob.add_order(make_limit_order(2, Side::Buy, 100, 5));
+        ob.add_order(make_limit_order(2, Side::Buy, 100, 5)).unwrap();
         assert_eq!(ob.size(), 1);
         assert_eq!(ob.best_bid(), Some(100));
     }
@@ -226,11 +237,11 @@ mod tests {
     #[test]
     fn modify_order_changes_price_and_quantity() {
         let mut ob = Orderbook::new();
-        ob.add_order(make_limit_order(1, Side::Buy, 100, 10));
-        
+        ob.add_order(make_limit_order(1, Side::Buy, 100, 10)).unwrap();
+
         let modify = OrderModify::new(1, Side::Buy, 105, 20);
-        let trades = ob.modify_order(modify);
-        
+        let trades = ob.modify_order(modify).unwrap().trades;
+
         assert!(trades.is_empty());
         assert_eq!(ob.size(), 1);
         assert_eq!(ob.best_bid(), Some(105));
@@ -239,13 +250,13 @@ mod tests {
     #[test]
     fn modify_order_can_trigger_match() {
         let mut ob = Orderbook::new();
-        ob.add_order(make_limit_order(1, Side::Sell, 100, 10));
-        ob.add_order(make_limit_order(2, Side::Buy, 95, 10));
-        
+        ob.add_order(make_limit_order(1, Side::Sell, 100, 10)).unwrap();
+        ob.add_order(make_limit_order(2, Side::Buy, 95, 10)).unwrap();
+
         // Modify bid to cross the spread
         let modify = OrderModify::new(2, Side::Buy, 100, 10);
-        let trades = ob.modify_order(modify);
-        
+        let trades = ob.modify_order(modify).unwrap().trades;
+
         assert_eq!(trades.len(), 1);
         assert_eq!(ob.size(), 0);
     }
@@ -254,41 +265,45 @@ mod tests {
     fn modify_nonexistent_order_is_noop() {
         let mut ob = Orderbook::new();
         let modify = OrderModify::new(999, Side::Buy, 100, 10);
-        let trades = ob.modify_order(modify);
-        
-        assert!(trades.is_empty());
+        let r = ob.modify_order(modify);
+
+        assert!(matches!(r, Err(ModifyOrderReject::OrderNotFound)));
         assert_eq!(ob.size(), 0);
     }
 
     #[test]
     fn fill_and_kill_rejected_when_no_match() {
         let mut ob = Orderbook::new();
-        ob.add_order(make_limit_order(1, Side::Sell, 100, 10));
-        
+        ob.add_order(make_limit_order(1, Side::Sell, 100, 10)).unwrap();
+
         // FAK buy at 95 can't match ask at 100
-        let trades = ob.add_order(make_fak_order(2, Side::Buy, 95, 10));
-        
-        assert!(trades.is_empty());
+        let r = ob.add_order(make_fak_order(2, Side::Buy, 95, 10));
+
+        assert!(matches!(r, Err(PlaceOrderReject::FillAndKillNoMatch)));
         assert_eq!(ob.size(), 1); // only the original ask
     }
 
     #[test]
     fn fill_and_kill_accepted_when_can_match() {
         let mut ob = Orderbook::new();
-        ob.add_order(make_limit_order(1, Side::Sell, 100, 10));
-        
+        ob.add_order(make_limit_order(1, Side::Sell, 100, 10)).unwrap();
+
         // FAK buy at 100 can match
-        let trades = ob.add_order(make_fak_order(2, Side::Buy, 100, 5));
-        
+        let trades = ob.add_order(make_fak_order(2, Side::Buy, 100, 5))
+            .unwrap()
+            .trades;
+
         assert_eq!(trades.len(), 1);
     }
 
     #[test]
     fn fill_and_kill_does_not_rest() {
         let mut ob = Orderbook::new();
-        ob.add_order(make_limit_order(1, Side::Sell, 100, 5));
+        ob.add_order(make_limit_order(1, Side::Sell, 100, 5)).unwrap();
 
-        let trades = ob.add_order(make_fak_order(2, Side::Buy, 100, 10));
+        let trades = ob.add_order(make_fak_order(2, Side::Buy, 100, 10))
+            .unwrap()
+            .trades;
 
         assert_eq!(trades.len(), 1);
         assert_eq!(ob.size(), 0);
@@ -299,11 +314,11 @@ mod tests {
     #[test]
     fn fill_or_kill_rejected_when_insufficient_liquidity() {
         let mut ob = Orderbook::new();
-        ob.add_order(make_limit_order(1, Side::Sell, 100, 5));
+        ob.add_order(make_limit_order(1, Side::Sell, 100, 5)).unwrap();
 
-        let trades = ob.add_order(make_fok_order(2, Side::Buy, 100, 10));
+        let r = ob.add_order(make_fok_order(2, Side::Buy, 100, 10));
 
-        assert!(trades.is_empty());
+        assert!(matches!(r, Err(PlaceOrderReject::FillOrKillInsufficientLiquidity)));
         assert_eq!(ob.size(), 1);
         assert_eq!(ob.best_ask(), Some(100));
     }
@@ -311,10 +326,12 @@ mod tests {
     #[test]
     fn fill_or_kill_fills_when_enough_liquidity() {
         let mut ob = Orderbook::new();
-        ob.add_order(make_limit_order(1, Side::Sell, 100, 5));
-        ob.add_order(make_limit_order(2, Side::Sell, 101, 5));
+        ob.add_order(make_limit_order(1, Side::Sell, 100, 5)).unwrap();
+        ob.add_order(make_limit_order(2, Side::Sell, 101, 5)).unwrap();
 
-        let trades = ob.add_order(make_fok_order(3, Side::Buy, 101, 10));
+        let trades = ob.add_order(make_fok_order(3, Side::Buy, 101, 10))
+            .unwrap()
+            .trades;
 
         assert_eq!(trades.len(), 2);
         assert_eq!(ob.size(), 0);
@@ -323,12 +340,12 @@ mod tests {
     #[test]
     fn post_only_rejected_if_would_cross() {
         let mut ob = Orderbook::new();
-        ob.add_order(make_limit_order(1, Side::Sell, 100, 10));
+        ob.add_order(make_limit_order(1, Side::Sell, 100, 10)).unwrap();
 
         let post_only = Order::new(2, Side::Buy, OrderType::PostOnly, 100, 5);
-        let trades = ob.add_order(post_only);
+        let r = ob.add_order(post_only);
 
-        assert!(trades.is_empty());
+        assert!(matches!(r, Err(PlaceOrderReject::PostOnlyWouldTakeLiquidity)));
         assert_eq!(ob.size(), 1);
         assert_eq!(ob.best_ask(), Some(100));
     }
@@ -336,10 +353,10 @@ mod tests {
     #[test]
     fn post_only_accepted_if_not_crossing() {
         let mut ob = Orderbook::new();
-        ob.add_order(make_limit_order(1, Side::Sell, 100, 10));
+        ob.add_order(make_limit_order(1, Side::Sell, 100, 10)).unwrap();
 
         let post_only = Order::new(2, Side::Buy, OrderType::PostOnly, 99, 5);
-        let trades = ob.add_order(post_only);
+        let trades = ob.add_order(post_only).unwrap().trades;
 
         assert!(trades.is_empty());
         assert_eq!(ob.size(), 2);
@@ -350,9 +367,11 @@ mod tests {
     #[test]
     fn market_order_does_not_rest() {
         let mut ob = Orderbook::new();
-        ob.add_order(make_limit_order(1, Side::Sell, 100, 5));
+        ob.add_order(make_limit_order(1, Side::Sell, 100, 5)).unwrap();
 
-        let trades = ob.add_order(make_market_order(2, Side::Buy, 10));
+        let trades = ob.add_order(make_market_order(2, Side::Buy, 10))
+            .unwrap()
+            .trades;
 
         assert_eq!(trades.len(), 1);
         assert_eq!(ob.size(), 0);
@@ -372,11 +391,11 @@ mod tests {
     #[test]
     fn get_order_infos_with_orders() {
         let mut ob = Orderbook::new();
-        ob.add_order(make_limit_order(1, Side::Buy, 100, 10));
-        ob.add_order(make_limit_order(2, Side::Buy, 100, 5));  // same level
-        ob.add_order(make_limit_order(3, Side::Buy, 95, 20));
-        ob.add_order(make_limit_order(4, Side::Sell, 105, 15));
-        ob.add_order(make_limit_order(5, Side::Sell, 110, 25));
+        ob.add_order(make_limit_order(1, Side::Buy, 100, 10)).unwrap();
+        ob.add_order(make_limit_order(2, Side::Buy, 100, 5)).unwrap(); // same level
+        ob.add_order(make_limit_order(3, Side::Buy, 95, 20)).unwrap();
+        ob.add_order(make_limit_order(4, Side::Sell, 105, 15)).unwrap();
+        ob.add_order(make_limit_order(5, Side::Sell, 110, 25)).unwrap();
         
         let infos = ob.get_order_infos();
         
@@ -399,11 +418,13 @@ mod tests {
     fn fifo_order_matching() {
         let mut ob = Orderbook::new();
         // Add two asks at same price - order 1 should be matched first
-        ob.add_order(make_limit_order(1, Side::Sell, 100, 10));
-        ob.add_order(make_limit_order(2, Side::Sell, 100, 10));
-        
-        let trades = ob.add_order(make_limit_order(3, Side::Buy, 100, 10));
-        
+        ob.add_order(make_limit_order(1, Side::Sell, 100, 10)).unwrap();
+        ob.add_order(make_limit_order(2, Side::Sell, 100, 10)).unwrap();
+
+        let trades = ob.add_order(make_limit_order(3, Side::Buy, 100, 10))
+            .unwrap()
+            .trades;
+
         assert_eq!(trades.len(), 1);
         // Order 1 should be fully filled, order 2 remains
         assert_eq!(ob.size(), 1);
@@ -417,13 +438,15 @@ mod tests {
     #[test]
     fn aggressive_buy_sweeps_multiple_levels() {
         let mut ob = Orderbook::new();
-        ob.add_order(make_limit_order(1, Side::Sell, 100, 5));
-        ob.add_order(make_limit_order(2, Side::Sell, 101, 5));
-        ob.add_order(make_limit_order(3, Side::Sell, 102, 5));
-        
+        ob.add_order(make_limit_order(1, Side::Sell, 100, 5)).unwrap();
+        ob.add_order(make_limit_order(2, Side::Sell, 101, 5)).unwrap();
+        ob.add_order(make_limit_order(3, Side::Sell, 102, 5)).unwrap();
+
         // Buy enough to consume first two levels, partial third
-        let trades = ob.add_order(make_limit_order(4, Side::Buy, 102, 12));
-        
+        let trades = ob.add_order(make_limit_order(4, Side::Buy, 102, 12))
+            .unwrap()
+            .trades;
+
         assert_eq!(trades.len(), 3);
         assert_eq!(ob.size(), 1); // partial ask at 102 remains
         assert_eq!(ob.best_ask(), Some(102));
@@ -432,13 +455,15 @@ mod tests {
     #[test]
     fn aggressive_sell_sweeps_multiple_levels() {
         let mut ob = Orderbook::new();
-        ob.add_order(make_limit_order(1, Side::Buy, 102, 5));
-        ob.add_order(make_limit_order(2, Side::Buy, 101, 5));
-        ob.add_order(make_limit_order(3, Side::Buy, 100, 5));
-        
+        ob.add_order(make_limit_order(1, Side::Buy, 102, 5)).unwrap();
+        ob.add_order(make_limit_order(2, Side::Buy, 101, 5)).unwrap();
+        ob.add_order(make_limit_order(3, Side::Buy, 100, 5)).unwrap();
+
         // Sell enough to consume first two levels, partial third
-        let trades = ob.add_order(make_limit_order(4, Side::Sell, 100, 12));
-        
+        let trades = ob.add_order(make_limit_order(4, Side::Sell, 100, 12))
+            .unwrap()
+            .trades;
+
         assert_eq!(trades.len(), 3);
         assert_eq!(ob.size(), 1); // partial bid at 100 remains
         assert_eq!(ob.best_bid(), Some(100));

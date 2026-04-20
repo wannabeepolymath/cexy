@@ -85,7 +85,9 @@ fn seed_book(
     for level in 0..levels {
         let price = start_price + price_step * level as Price;
         for _ in 0..orders_per_level {
-            book.add_order(make_limit_order(next_id, side, price, quantity));
+            book
+                .add_order(make_limit_order(next_id, side, price, quantity))
+                .unwrap();
             next_id += 1;
         }
     }
@@ -105,7 +107,9 @@ fn seed_engine(
     for level in 0..levels {
         let price = start_price + price_step * level as Price;
         for _ in 0..orders_per_level {
-            engine.place_order(make_limit_order(next_id, side, price, quantity));
+            engine
+                .place_order(make_limit_order(next_id, side, price, quantity))
+                .unwrap();
             next_id += 1;
         }
     }
@@ -132,7 +136,7 @@ fn bench_orderbook_add_limit(c: &mut Criterion) {
             },
             |(mut book, order_id)| {
                 let order = make_limit_order(order_id, Side::Buy, BASE_PRICE - 25, ORDER_QTY);
-                black_box(book.add_order(order));
+                black_box(book.add_order(order).unwrap());
             },
             BatchSize::SmallInput,
         );
@@ -152,7 +156,8 @@ fn bench_orderbook_cancel(c: &mut Criterion) {
                     Side::Buy,
                     BASE_PRICE,
                     ORDER_QTY,
-                ));
+                ))
+                .unwrap();
                 seed_book(
                     &mut book,
                     target_id + 1,
@@ -186,7 +191,8 @@ fn bench_orderbook_modify(c: &mut Criterion) {
                     Side::Buy,
                     BASE_PRICE,
                     ORDER_QTY,
-                ));
+                ))
+                .unwrap();
                 seed_book(
                     &mut book,
                     target_id + 1,
@@ -206,7 +212,7 @@ fn bench_orderbook_modify(c: &mut Criterion) {
                 (book, modify)
             },
             |(mut book, modify)| {
-                black_box(book.modify_order(modify));
+                black_box(book.modify_order(modify).unwrap());
             },
             BatchSize::SmallInput,
         );
@@ -239,7 +245,7 @@ fn bench_orderbook_cross_spread(c: &mut Criterion) {
                 (book, aggressive)
             },
             |(mut book, aggressive)| {
-                black_box(book.add_order(aggressive));
+                black_box(book.add_order(aggressive).unwrap());
             },
             BatchSize::SmallInput,
         );
@@ -332,7 +338,7 @@ fn bench_engine_place_order(c: &mut Criterion) {
                 (engine, order)
             },
             |(mut engine, order)| {
-                black_box(engine.place_order(order));
+                black_box(engine.place_order(order).unwrap());
             },
             BatchSize::SmallInput,
         );

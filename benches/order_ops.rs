@@ -119,7 +119,9 @@ fn seed_engine(
     for level in 0..levels {
         let price = start_price + price_step * level as Price;
         for _ in 0..orders_per_level {
-            engine.place_order(make_limit_order(next_id, side, price, quantity));
+            engine
+                .place_order(make_limit_order(next_id, side, price, quantity))
+                .unwrap();
             next_id += 1;
         }
     }
@@ -194,7 +196,7 @@ fn run_workers(engine: Arc<Mutex<Engine>>, duration: Duration, config: &Config) 
                 let order = Order::new(order_id, side, OrderType::FillAndKill, price, order_qty);
                 {
                     let mut engine = engine.lock().expect("engine mutex poisoned");
-                    engine.place_order(order);
+                    engine.place_order(order).unwrap();
                 }
                 order_id += 1;
                 side = match side {

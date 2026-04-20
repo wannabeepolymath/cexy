@@ -1,4 +1,5 @@
 use actix_web::{web, App, HttpResponse, HttpServer, Responder};
+use engine::commands::{CancelOrderResult, ModifyOrderReject};
 use engine::engine::Engine;
 use engine::orderbook::order::Order;
 use engine::orderbook::order_modify::OrderModify;
@@ -132,12 +133,16 @@ async fn create_order(
     };
 
     let mut engine = state.engine.lock().unwrap();
-    let trades = engine.place_order(order);
-    HttpResponse::Ok().json(OrderResult {
-        trades: trades.len(),
-        best_bid: engine.best_bid(),
-        best_ask: engine.best_ask(),
-    })
+    match engine.place_order(order) {
+        Ok(success) => HttpResponse::Ok().json(OrderResult {
+            trades: success.trades.len(),
+            best_bid: engine.best_bid(),
+            best_ask: engine.best_ask(),
+        }),
+        Err(reject) => HttpResponse::BadRequest().json(ErrorResponse {
+            error: reject.to_string(),
+        }),
+    }
 }
 
 async fn modify_order(
@@ -155,22 +160,35 @@ async fn modify_order(
 
     let modify = OrderModify::new(payload.order_id, side, payload.price, payload.quantity);
     let mut engine = state.engine.lock().unwrap();
-    let trades = engine.modify_order(modify);
-    HttpResponse::Ok().json(OrderResult {
-        trades: trades.len(),
-        best_bid: engine.best_bid(),
-        best_ask: engine.best_ask(),
-    })
+    match engine.modify_order(modify) {
+        Ok(success) => HttpResponse::Ok().json(OrderResult {
+            trades: success.trades.len(),
+            best_bid: engine.best_bid(),
+            best_ask: engine.best_ask(),
+        }),
+        Err(ModifyOrderReject::OrderNotFound) => {
+            HttpResponse::NotFound().json(ErrorResponse {
+                error: "order not found".to_string(),
+            })
+        }
+        Err(ModifyOrderReject::PlaceRejected(e)) => HttpResponse::BadRequest().json(ErrorResponse {
+            error: e.to_string(),
+        }),
+    }
 }
 
 async fn cancel_order(state: web::Data<AppState>, path: web::Path<OrderId>) -> impl Responder {
     let order_id = path.into_inner();
     let mut engine = state.engine.lock().unwrap();
-    engine.cancel_order(order_id);
-    HttpResponse::Ok().json(TopOfBookResponse {
-        best_bid: engine.best_bid(),
-        best_ask: engine.best_ask(),
-    })
+    match engine.cancel_order(order_id) {
+        CancelOrderResult::Cancelled => HttpResponse::Ok().json(TopOfBookResponse {
+            best_bid: engine.best_bid(),
+            best_ask: engine.best_ask(),
+        }),
+        CancelOrderResult::NotFound => HttpResponse::NotFound().json(ErrorResponse {
+            error: "order not found".to_string(),
+        }),
+    }
 }
 
 async fn orderbook(state: web::Data<AppState>) -> impl Responder {

@@ -1,4 +1,8 @@
 use std::collections::{BTreeMap, VecDeque, HashMap};
+use crate::commands::{
+    CancelOrderResult, CancelOrdersSummary, ModifyOrderReject, ModifyOrderResult, ModifyOrderSuccess,
+    PlaceOrderReject, PlaceOrderResult, PlaceOrderSuccess,
+};
 use crate::orderbook::types::{Price, Quantity, OrderId, OrderIds};
 use crate::orderbook::side::Side;
 use crate::orderbook::order_type::OrderType;
@@ -186,7 +190,7 @@ impl Orderbook {
         trades
     }
 
-    pub fn add_order(&mut self, mut order: Order) -> Trades {
+    pub fn add_order(&mut self, mut order: Order) -> PlaceOrderResult {
         let order_id = order.order_id;
         let side = order.side();
         let mut price = order.price();
@@ -195,11 +199,11 @@ impl Orderbook {
         let is_immediate_or_cancel = matches!(order_type, OrderType::FillAndKill | OrderType::Market);
 
         if self.orders.contains_key(&order_id) {
-            return Trades::new();
+            return Err(PlaceOrderReject::DuplicateOrderId);
         }
 
         if order_type == OrderType::PostOnly && self.can_match(side, price) {
-            return Trades::new();
+            return Err(PlaceOrderReject::PostOnlyWouldTakeLiquidity);
         }
 
         if order_type == OrderType::Market {
@@ -222,17 +226,17 @@ impl Orderbook {
                 }
             };
             if !converted {
-                return Trades::new();
+                return Err(PlaceOrderReject::NoLiquidityForMarket);
             }
             price = order.price();
         }
 
         if order_type == OrderType::FillAndKill && !self.can_match(side, price) {
-            return Trades::new();
+            return Err(PlaceOrderReject::FillAndKillNoMatch);
         }
 
         if order_type == OrderType::FillOrKill && !self.can_fully_fill(side, price, quantity) {
-            return Trades::new();
+            return Err(PlaceOrderReject::FillOrKillInsufficientLiquidity);
         }
 
         self.orders.insert(order_id, order);
@@ -253,17 +257,26 @@ impl Orderbook {
             self.cancel_order_internal(order_id);
         }
 
-        trades
+        Ok(PlaceOrderSuccess { trades })
     }
 
-    pub fn cancel_order(&mut self, order_id: OrderId) {
-        self.cancel_order_internal(order_id);
-    }
-
-    pub fn cancel_orders(&mut self, order_ids: OrderIds) {
-        for order_id in order_ids {
-            self.cancel_order_internal(order_id);
+    pub fn cancel_order(&mut self, order_id: OrderId) -> CancelOrderResult {
+        if !self.orders.contains_key(&order_id) {
+            return CancelOrderResult::NotFound;
         }
+        self.cancel_order_internal(order_id);
+        CancelOrderResult::Cancelled
+    }
+
+    pub fn cancel_orders(&mut self, order_ids: OrderIds) -> CancelOrdersSummary {
+        let mut summary = CancelOrdersSummary::default();
+        for order_id in order_ids {
+            match self.cancel_order(order_id) {
+                CancelOrderResult::Cancelled => summary.cancelled += 1,
+                CancelOrderResult::NotFound => summary.not_found += 1,
+            }
+        }
+        summary
     }
     fn cancel_order_internal(&mut self, order_id: OrderId) {
         let Some(order) = self.orders.remove(&order_id) else { return };
@@ -286,15 +299,19 @@ impl Orderbook {
         self.on_order_cancelled(price, remaining);
     }
 
-    pub fn modify_order(&mut self, order_modify: OrderModify) -> Trades {
+    pub fn modify_order(&mut self, order_modify: OrderModify) -> ModifyOrderResult {
         let Some(order) = self.orders.get(&order_modify.order_id()) else {
-            return Trades::new();
+            return Err(ModifyOrderReject::OrderNotFound);
         };
 
         let order_type = order.order_type();
-        
-        self.cancel_order(order_modify.order_id());
+
+        self.cancel_order_internal(order_modify.order_id());
         self.add_order(order_modify.modify(order_type))
+            .map(|success| ModifyOrderSuccess {
+                trades: success.trades,
+            })
+            .map_err(ModifyOrderReject::from)
     }
 
 
@@ -366,9 +383,9 @@ impl Orderbook {
         OrderbookLevelInfo::new(bid_infos, ask_infos)
     }
 
-    fn prune_good_till_cancel(&mut self) {
-        // Goodtillcancel orders, cex is open 24/7, so no opening/closing auctions
-    }
+    // fn prune_good_till_cancel(&mut self) {
+    //     // Goodtillcancel orders, cex is open 24/7, so no opening/closing auctions
+    // }
     
 }
 

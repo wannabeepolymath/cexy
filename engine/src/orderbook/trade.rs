@@ -1,5 +1,6 @@
 use crate::orderbook::types::{OrderId, Price, Quantity};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TradeInfo {
     order_id: OrderId,
     price: Price,
@@ -16,6 +17,7 @@ impl TradeInfo{
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Trade {
     bids_trades: TradeInfo,
     asks_trades: TradeInfo,

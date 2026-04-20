@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-actix-web = "4.12.1"
+actix-web = { version = "4.12.1", default-features = false, features = ["macros"] }
 engine = { path = "../engine" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
