@@ -35,12 +35,12 @@ impl Engine {
 
     pub fn execute(&mut self, cmd: Command) -> CommandOutput {
         match cmd {
-            Command::PlaceOrder { order } => CommandOutput::PlaceOrder(self.place_order(order)),
-            Command::CancelOrder { order_id } => CommandOutput::CancelOrder(self.cancel_order(order_id)),
-            Command::CancelOrders { order_ids } => {
+            Command::PlaceOrder { order, .. } => CommandOutput::PlaceOrder(self.place_order(order)),
+            Command::CancelOrder { order_id, .. } => CommandOutput::CancelOrder(self.cancel_order(order_id)),
+            Command::CancelOrders { order_ids, .. } => {
                 CommandOutput::CancelOrders(self.cancel_orders(order_ids))
             }
-            Command::ModifyOrder { modify } => CommandOutput::ModifyOrder(self.modify_order(modify)),
+            Command::ModifyOrder { modify, .. } => CommandOutput::ModifyOrder(self.modify_order(modify)),
         }
     }
 

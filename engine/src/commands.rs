@@ -8,13 +8,37 @@ use crate::orderbook::trade::Trades;
 use crate::orderbook::types::{OrderId, OrderIds};
 use thiserror::Error;
 
+pub type InstrumentId = u32;
+pub type AccountId = u64;
+pub type RequestId = u64;
+
 /// A single inbound action for [`crate::engine::Engine::execute`](crate::engine::Engine::execute).
 #[derive(Debug, Clone)]
 pub enum Command {
-    PlaceOrder { order: Order },
-    CancelOrder { order_id: OrderId },
-    CancelOrders { order_ids: OrderIds },
-    ModifyOrder { modify: OrderModify },
+    PlaceOrder {
+        instrument_id: InstrumentId,
+        account_id: AccountId,
+        request_id: RequestId,
+        order: Order,
+    },
+    CancelOrder {
+        instrument_id: InstrumentId,
+        account_id: AccountId,
+        request_id: RequestId,
+        order_id: OrderId,
+    },
+    CancelOrders {
+        instrument_id: InstrumentId,
+        account_id: AccountId,
+        request_id: RequestId,
+        order_ids: OrderIds,
+    },
+    ModifyOrder {
+        instrument_id: InstrumentId,
+        account_id: AccountId,
+        request_id: RequestId,
+        modify: OrderModify,
+    },
 }
 
 /// Result of [`Command`] dispatch; discriminant matches [`Command`].
