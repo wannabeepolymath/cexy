@@ -182,6 +182,7 @@ dependencies = [
  "engine",
  "serde",
  "serde_json",
+ "thiserror",
 ]
 
 [[package]]

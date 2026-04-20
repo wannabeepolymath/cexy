@@ -101,6 +101,66 @@ mod tests {
     }
 
     #[actix_web::test]
+    async fn admin_register_instrument_creates_book() {
+        let state = app_state();
+        let app = test::init_service(App::new().app_data(state.clone()).configure(configure)).await;
+        let req = test::TestRequest::post()
+            .uri("/admin/instruments")
+            .set_json(json!({"instrument_id": 7}))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), StatusCode::CREATED);
+        let body: Value = test::read_body_json(resp).await;
+        assert_eq!(body["instrument_id"], 7);
+        assert_eq!(body["created"], true);
+
+        // Follow-up: placing an order on the newly-registered instrument should succeed.
+        let place_req = test::TestRequest::post()
+            .uri("/api/v1/order")
+            .set_json(json!({
+                "instrument_id": 7,
+                "account_id": 42,
+                "request_id": 1,
+                "order_id": 1,
+                "side": "buy",
+                "order_type": "limit",
+                "price": 100,
+                "quantity": 10
+            }))
+            .to_request();
+        let place_resp = test::call_service(&app, place_req).await;
+        assert_eq!(place_resp.status(), StatusCode::OK);
+    }
+
+    #[actix_web::test]
+    async fn admin_register_instrument_is_idempotent() {
+        let app = test::init_service(App::new().app_data(app_state()).configure(configure)).await;
+        // Instrument 1 is already registered by `app_state()`.
+        let req = test::TestRequest::post()
+            .uri("/admin/instruments")
+            .set_json(json!({"instrument_id": 1}))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body: Value = test::read_body_json(resp).await;
+        assert_eq!(body["instrument_id"], 1);
+        assert_eq!(body["created"], false);
+    }
+
+    #[actix_web::test]
+    async fn admin_register_instrument_rejects_zero() {
+        let app = test::init_service(App::new().app_data(app_state()).configure(configure)).await;
+        let req = test::TestRequest::post()
+            .uri("/admin/instruments")
+            .set_json(json!({"instrument_id": 0}))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let body: Value = test::read_body_json(resp).await;
+        assert_eq!(body["error"], "instrument_id must be greater than 0");
+    }
+
+    #[actix_web::test]
     async fn cancel_order_rejects_invalid_identity_fields() {
         let app = test::init_service(App::new().app_data(app_state()).configure(configure)).await;
 

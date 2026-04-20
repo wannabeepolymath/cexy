@@ -70,3 +70,15 @@ pub struct OrderbookResponse {
     pub bids: Vec<Level>,
     pub asks: Vec<Level>,
 }
+
+#[derive(Deserialize)]
+pub struct RegisterInstrumentRequest {
+    pub instrument_id: u32,
+}
+
+#[derive(Serialize)]
+pub struct RegisterInstrumentResponse {
+    pub instrument_id: u32,
+    /// `true` when this call actually created a book, `false` on idempotent re-registration.
+    pub created: bool,
+}

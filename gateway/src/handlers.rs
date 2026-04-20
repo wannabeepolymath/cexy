@@ -10,9 +10,12 @@ use engine::orderbook::types::OrderId;
 use crate::app_state::AppState;
 use crate::http_models::{
     CancelOrderQuery, CreateOrderRequest, ErrorResponse, HealthResponse, InstrumentQuery, Level,
-    ModifyOrderRequest, OrderResult, OrderbookResponse, TopOfBookResponse,
+    ModifyOrderRequest, OrderResult, OrderbookResponse, RegisterInstrumentRequest,
+    RegisterInstrumentResponse, TopOfBookResponse,
 };
 use crate::parsing::{parse_order_type, parse_side, validate_request_identity};
+
+
 
 fn bad_request(message: &str) -> HttpResponse {
     HttpResponse::BadRequest().json(ErrorResponse {
@@ -244,13 +247,38 @@ pub async fn top_of_book(
     })
 }
 
+pub async fn register_instrument(
+    state: web::Data<AppState>,
+    payload: web::Json<RegisterInstrumentRequest>,
+) -> impl Responder {
+    if payload.instrument_id == 0 {
+        return bad_request("instrument_id must be greater than 0");
+    }
+    let mut engine = state.engine.lock().unwrap();
+    let created = engine.register_instrument(payload.instrument_id);
+    let body = RegisterInstrumentResponse {
+        instrument_id: payload.instrument_id,
+        created,
+    };
+    if created {
+        HttpResponse::Created().json(body)
+    } else {
+        HttpResponse::Ok().json(body)
+    }
+}
+
 pub fn configure(cfg: &mut web::ServiceConfig) {
-    cfg.route("/health", web::get().to(health)).service(
-        web::scope("/api/v1")
-            .route("/order", web::post().to(create_order))
-            .route("/order/modify", web::post().to(modify_order))
-            .route("/order/{order_id}", web::delete().to(cancel_order))
-            .route("/orderbook", web::get().to(orderbook))
-            .route("/orderbook/top", web::get().to(top_of_book)),
-    );
+    cfg.route("/health", web::get().to(health))
+        .service(
+            web::scope("/api/v1")
+                .route("/order", web::post().to(create_order))
+                .route("/order/modify", web::post().to(modify_order))
+                .route("/order/{order_id}", web::delete().to(cancel_order))
+                .route("/orderbook", web::get().to(orderbook))
+                .route("/orderbook/top", web::get().to(top_of_book)),
+        )
+        .service(
+            web::scope("/admin")
+                .route("/instruments", web::post().to(register_instrument)),
+        );
 }
