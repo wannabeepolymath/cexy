@@ -7,7 +7,7 @@ use crate::orderbook::types::{Price, Quantity, OrderId, OrderIds};
 use crate::orderbook::side::Side;
 use crate::orderbook::order_type::OrderType;
 use crate::orderbook::order::{Order};
-use crate::orderbook::trade::{Trade, Trades, TradeInfo};
+use crate::orderbook::trade::{Trade, Trades};
 use crate::orderbook::order_modify::OrderModify;
 use crate::orderbook::level_info::{OrderbookLevelInfo, LevelInfo, LevelInfos};
 
@@ -29,7 +29,8 @@ pub struct Orderbook {
     data: HashMap<Price, LevelData>,
     orders: HashMap<OrderId, Order>,
     bids: BTreeMap<Price, OrderIdList>,
-    asks: BTreeMap<Price, OrderIdList>
+    asks: BTreeMap<Price, OrderIdList>,
+    next_trade_seq: u64,
 }
 
 impl Orderbook {
@@ -39,6 +40,7 @@ impl Orderbook {
             orders: HashMap::new(),
             bids: BTreeMap::new(),
             asks: BTreeMap::new(),
+            next_trade_seq: 0,
         }
     }
 
@@ -121,10 +123,15 @@ impl Orderbook {
         }
     }
 
-    fn match_orders(&mut self) -> Trades {
+    fn match_orders(&mut self, taker_order_id: OrderId, taker_side: Side) -> Trades {
         let mut trades = Vec::new();
+        const UNKNOWN_INSTRUMENT_ID: u32 = 0;
 
         loop {
+            if !self.orders.contains_key(&taker_order_id) {
+                break;
+            }
+
             let Some(bid_price) = self.best_bid() else { break };
             let Some(ask_price) = self.best_ask() else { break };
 
@@ -169,9 +176,21 @@ impl Orderbook {
                     self.orders.remove(&ask_id);
                 }
 
+                let (price, maker_order_id, maker_side) = match taker_side {
+                    Side::Buy => (ask_price_val, ask_id, Side::Sell),
+                    Side::Sell => (bid_price_val, bid_id, Side::Buy),
+                };
+                let seq = self.next_trade_seq;
+                self.next_trade_seq = self.next_trade_seq.saturating_add(1);
+
                 trades.push(Trade::new(
-                    TradeInfo::new(bid_id, bid_price_val, quantity),
-                    TradeInfo::new(ask_id, ask_price_val, quantity),
+                    price,
+                    quantity,
+                    maker_order_id,
+                    taker_order_id,
+                    maker_side,
+                    UNKNOWN_INSTRUMENT_ID,
+                    seq,
                 ));
                 self.on_order_matched(bid_price_val, quantity, bid_filled);
                 self.on_order_matched(ask_price_val, quantity, ask_filled);
@@ -251,7 +270,7 @@ impl Orderbook {
         }
         self.on_order_added(price, quantity);
 
-        let trades = self.match_orders();
+        let trades = self.match_orders(order_id, side);
 
         if is_immediate_or_cancel && self.orders.contains_key(&order_id) {
             self.cancel_order_internal(order_id);
