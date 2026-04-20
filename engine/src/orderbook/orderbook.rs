@@ -303,6 +303,9 @@ impl Orderbook {
         let Some(order) = self.orders.get(&order_modify.order_id()) else {
             return Err(ModifyOrderReject::OrderNotFound);
         };
+        if order.side() != order_modify.side() {
+            return Err(ModifyOrderReject::SideChangeNotAllowed);
+        }
 
         let order_type = order.order_type();
 

@@ -68,6 +68,8 @@ pub struct ModifyOrderSuccess {
 pub enum ModifyOrderReject {
     #[error("order not found")]
     OrderNotFound,
+    #[error("side change not allowed on modify")]
+    SideChangeNotAllowed,
     #[error(transparent)]
     PlaceRejected(#[from] PlaceOrderReject),
 }

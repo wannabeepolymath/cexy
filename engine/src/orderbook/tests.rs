@@ -272,6 +272,20 @@ mod tests {
     }
 
     #[test]
+    fn modify_order_rejects_side_change() {
+        let mut ob = Orderbook::new();
+        ob.add_order(make_limit_order(1, Side::Buy, 100, 10)).unwrap();
+
+        let modify = OrderModify::new(1, Side::Sell, 105, 20);
+        let r = ob.modify_order(modify);
+
+        assert!(matches!(r, Err(ModifyOrderReject::SideChangeNotAllowed)));
+        assert_eq!(ob.size(), 1);
+        assert_eq!(ob.best_bid(), Some(100));
+        assert!(ob.best_ask().is_none());
+    }
+
+    #[test]
     fn fill_and_kill_rejected_when_no_match() {
         let mut ob = Orderbook::new();
         ob.add_order(make_limit_order(1, Side::Sell, 100, 10)).unwrap();
