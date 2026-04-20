@@ -7,6 +7,9 @@ mod handlers;
 mod http_models;
 mod parsing;
 
+#[cfg(test)]
+mod handlers_tests;
+
 use app_state::AppState;
 
 #[actix_web::main]
