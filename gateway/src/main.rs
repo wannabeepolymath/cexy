@@ -16,8 +16,14 @@ use app_state::AppState;
 async fn main() -> std::io::Result<()> {
     let bind_addr =
         std::env::var("GATEWAY_BIND").unwrap_or_else(|_| "127.0.0.1:8080".to_string());
+
+    // TODO(phase-1/step-6): load the registered instrument set from config.
+    // For now we boot with a single default instrument so the gateway is usable.
+    let mut engine = Engine::new();
+    engine.register_instrument(1);
+
     let state = web::Data::new(AppState {
-        engine: Mutex::new(Engine::new()),
+        engine: Mutex::new(engine),
     });
 
     println!("Gateway listening on http://{bind_addr}");

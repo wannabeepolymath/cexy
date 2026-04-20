@@ -5,11 +5,31 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use engine::commands::{Command, CommandOutput, InstrumentId};
 use engine::engine::Engine;
 use engine::orderbook::order::Order;
 use engine::orderbook::order_type::OrderType;
 use engine::orderbook::side::Side;
 use engine::orderbook::types::{OrderId, Price, Quantity};
+
+const BENCH_INSTRUMENT_ID: InstrumentId = 1;
+
+fn engine_place_order(engine: &mut Engine, order: Order) {
+    match engine
+        .execute(Command::PlaceOrder {
+            instrument_id: BENCH_INSTRUMENT_ID,
+            account_id: 1,
+            request_id: 1,
+            order,
+        })
+        .expect("registered instrument routes")
+    {
+        CommandOutput::PlaceOrder(result) => {
+            result.expect("bench place_order must succeed");
+        }
+        _ => unreachable!("execute must return PlaceOrder output for PlaceOrder command"),
+    }
+}
 
 const BASE_PRICE: Price = 10_000;
 const DEFAULT_DURATION_MS: u64 = 5_000;
@@ -119,9 +139,7 @@ fn seed_engine(
     for level in 0..levels {
         let price = start_price + price_step * level as Price;
         for _ in 0..orders_per_level {
-            engine
-                .place_order(make_limit_order(next_id, side, price, quantity))
-                .unwrap();
+            engine_place_order(engine, make_limit_order(next_id, side, price, quantity));
             next_id += 1;
         }
     }
@@ -142,8 +160,8 @@ struct Snapshot {
 }
 
 fn snapshot_engine(engine: &Engine) -> Snapshot {
-    let best_bid = engine.best_bid();
-    let best_ask = engine.best_ask();
+    let best_bid = engine.best_bid(BENCH_INSTRUMENT_ID);
+    let best_ask = engine.best_ask(BENCH_INSTRUMENT_ID);
     let spread = match (best_bid, best_ask) {
         (Some(bid), Some(ask)) => Some(ask - bid),
         _ => None,
@@ -152,7 +170,9 @@ fn snapshot_engine(engine: &Engine) -> Snapshot {
         (Some(bid), Some(ask)) => Some((bid as f64 + ask as f64) / 2.0),
         _ => None,
     };
-    let state = engine.get_orderbook_state();
+    let state = engine
+        .get_orderbook_state(BENCH_INSTRUMENT_ID)
+        .expect("bench instrument is registered");
     let total_bid_qty = state
         .get_bids()
         .iter()
@@ -169,7 +189,7 @@ fn snapshot_engine(engine: &Engine) -> Snapshot {
         best_ask,
         spread,
         mid_price,
-        total_orders: engine.order_count(),
+        total_orders: engine.order_count(BENCH_INSTRUMENT_ID).unwrap_or(0),
         bid_levels: state.get_bids().len(),
         ask_levels: state.get_asks().len(),
         total_bid_qty,
@@ -196,7 +216,7 @@ fn run_workers(engine: Arc<Mutex<Engine>>, duration: Duration, config: &Config) 
                 let order = Order::new(order_id, side, OrderType::FillAndKill, price, order_qty);
                 {
                     let mut engine = engine.lock().expect("engine mutex poisoned");
-                    engine.place_order(order).unwrap();
+                    engine_place_order(&mut engine, order);
                 }
                 order_id += 1;
                 side = match side {
@@ -217,7 +237,11 @@ fn run_workers(engine: Arc<Mutex<Engine>>, duration: Duration, config: &Config) 
 
 fn main() {
     let config = Config::from_args();
-    let engine = Arc::new(Mutex::new(Engine::new()));
+    let engine = {
+        let mut engine = Engine::new();
+        engine.register_instrument(BENCH_INSTRUMENT_ID);
+        Arc::new(Mutex::new(engine))
+    };
 
     let run_started_at = SystemTime::now();
 

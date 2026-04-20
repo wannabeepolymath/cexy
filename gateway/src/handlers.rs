@@ -1,5 +1,7 @@
 use actix_web::{web, HttpResponse, Responder};
-use engine::commands::{CancelOrderResult, Command, CommandOutput, ModifyOrderReject};
+use engine::commands::{
+    CancelOrderResult, Command, CommandOutput, EngineError, ModifyOrderReject,
+};
 use engine::orderbook::order::Order;
 use engine::orderbook::order_modify::OrderModify;
 use engine::orderbook::order_type::OrderType;
@@ -7,14 +9,20 @@ use engine::orderbook::types::OrderId;
 
 use crate::app_state::AppState;
 use crate::http_models::{
-    CancelOrderQuery, CreateOrderRequest, ErrorResponse, HealthResponse, Level, ModifyOrderRequest,
-    OrderResult, OrderbookResponse, TopOfBookResponse,
+    CancelOrderQuery, CreateOrderRequest, ErrorResponse, HealthResponse, InstrumentQuery, Level,
+    ModifyOrderRequest, OrderResult, OrderbookResponse, TopOfBookResponse,
 };
 use crate::parsing::{parse_order_type, parse_side, validate_request_identity};
 
 fn bad_request(message: &str) -> HttpResponse {
     HttpResponse::BadRequest().json(ErrorResponse {
         error: message.to_string(),
+    })
+}
+
+fn unknown_instrument(instrument_id: u32) -> HttpResponse {
+    HttpResponse::NotFound().json(ErrorResponse {
+        error: format!("unknown instrument: {instrument_id}"),
     })
 }
 
@@ -69,25 +77,26 @@ pub async fn create_order(
     };
 
     let mut engine = state.engine.lock().unwrap();
-    match engine.execute(Command::PlaceOrder {
-        instrument_id: payload.instrument_id,
+    let instrument_id = payload.instrument_id;
+    let result = engine.execute(Command::PlaceOrder {
+        instrument_id,
         account_id: payload.account_id,
         request_id: payload.request_id,
         order,
-    }) {
-        CommandOutput::PlaceOrder(result) => match result {
-            Ok(success) => HttpResponse::Ok().json(OrderResult {
-                trades: success.trades.len(),
-                best_bid: engine.best_bid(),
-                best_ask: engine.best_ask(),
-            }),
-            Err(reject) => HttpResponse::BadRequest().json(ErrorResponse {
-                error: reject.to_string(),
-            }),
-        },
-        _ => HttpResponse::InternalServerError().json(ErrorResponse {
+    });
+    match result {
+        Ok(CommandOutput::PlaceOrder(Ok(success))) => HttpResponse::Ok().json(OrderResult {
+            trades: success.trades.len(),
+            best_bid: engine.best_bid(instrument_id),
+            best_ask: engine.best_ask(instrument_id),
+        }),
+        Ok(CommandOutput::PlaceOrder(Err(reject))) => HttpResponse::BadRequest().json(ErrorResponse {
+            error: reject.to_string(),
+        }),
+        Ok(_) => HttpResponse::InternalServerError().json(ErrorResponse {
             error: "unexpected command output".to_string(),
         }),
+        Err(EngineError::UnknownInstrument(id)) => unknown_instrument(id),
     }
 }
 
@@ -114,35 +123,38 @@ pub async fn modify_order(
 
     let modify = OrderModify::new(payload.order_id, side, payload.price, payload.quantity);
     let mut engine = state.engine.lock().unwrap();
-    match engine.execute(Command::ModifyOrder {
-        instrument_id: payload.instrument_id,
+    let instrument_id = payload.instrument_id;
+    let result = engine.execute(Command::ModifyOrder {
+        instrument_id,
         account_id: payload.account_id,
         request_id: payload.request_id,
         modify,
-    }) {
-        CommandOutput::ModifyOrder(result) => match result {
-            Ok(success) => HttpResponse::Ok().json(OrderResult {
-                trades: success.trades.len(),
-                best_bid: engine.best_bid(),
-                best_ask: engine.best_ask(),
-            }),
-            Err(ModifyOrderReject::OrderNotFound) => {
-                HttpResponse::NotFound().json(ErrorResponse {
-                    error: "order not found".to_string(),
-                })
-            }
-            Err(ModifyOrderReject::SideChangeNotAllowed) => {
-                HttpResponse::BadRequest().json(ErrorResponse {
-                    error: "side change not allowed on modify".to_string(),
-                })
-            }
-            Err(ModifyOrderReject::PlaceRejected(e)) => HttpResponse::BadRequest().json(ErrorResponse {
+    });
+    match result {
+        Ok(CommandOutput::ModifyOrder(Ok(success))) => HttpResponse::Ok().json(OrderResult {
+            trades: success.trades.len(),
+            best_bid: engine.best_bid(instrument_id),
+            best_ask: engine.best_ask(instrument_id),
+        }),
+        Ok(CommandOutput::ModifyOrder(Err(ModifyOrderReject::OrderNotFound))) => {
+            HttpResponse::NotFound().json(ErrorResponse {
+                error: "order not found".to_string(),
+            })
+        }
+        Ok(CommandOutput::ModifyOrder(Err(ModifyOrderReject::SideChangeNotAllowed))) => {
+            HttpResponse::BadRequest().json(ErrorResponse {
+                error: "side change not allowed on modify".to_string(),
+            })
+        }
+        Ok(CommandOutput::ModifyOrder(Err(ModifyOrderReject::PlaceRejected(e)))) => {
+            HttpResponse::BadRequest().json(ErrorResponse {
                 error: e.to_string(),
-            }),
-        },
-        _ => HttpResponse::InternalServerError().json(ErrorResponse {
+            })
+        }
+        Ok(_) => HttpResponse::InternalServerError().json(ErrorResponse {
             error: "unexpected command output".to_string(),
         }),
+        Err(EngineError::UnknownInstrument(id)) => unknown_instrument(id),
     }
 }
 
@@ -159,30 +171,43 @@ pub async fn cancel_order(
     }
 
     let mut engine = state.engine.lock().unwrap();
-    match engine.execute(Command::CancelOrder {
-        instrument_id: query.instrument_id,
+    let instrument_id = query.instrument_id;
+    let result = engine.execute(Command::CancelOrder {
+        instrument_id,
         account_id: query.account_id,
         request_id: query.request_id,
         order_id,
-    }) {
-        CommandOutput::CancelOrder(result) => match result {
-            CancelOrderResult::Cancelled => HttpResponse::Ok().json(TopOfBookResponse {
-                best_bid: engine.best_bid(),
-                best_ask: engine.best_ask(),
-            }),
-            CancelOrderResult::NotFound => HttpResponse::NotFound().json(ErrorResponse {
+    });
+    match result {
+        Ok(CommandOutput::CancelOrder(CancelOrderResult::Cancelled)) => {
+            HttpResponse::Ok().json(TopOfBookResponse {
+                best_bid: engine.best_bid(instrument_id),
+                best_ask: engine.best_ask(instrument_id),
+            })
+        }
+        Ok(CommandOutput::CancelOrder(CancelOrderResult::NotFound)) => {
+            HttpResponse::NotFound().json(ErrorResponse {
                 error: "order not found".to_string(),
-            }),
-        },
-        _ => HttpResponse::InternalServerError().json(ErrorResponse {
+            })
+        }
+        Ok(_) => HttpResponse::InternalServerError().json(ErrorResponse {
             error: "unexpected command output".to_string(),
         }),
+        Err(EngineError::UnknownInstrument(id)) => unknown_instrument(id),
     }
 }
 
-pub async fn orderbook(state: web::Data<AppState>) -> impl Responder {
+pub async fn orderbook(
+    state: web::Data<AppState>,
+    query: web::Query<InstrumentQuery>,
+) -> impl Responder {
+    if query.instrument_id == 0 {
+        return bad_request("instrument_id must be greater than 0");
+    }
     let engine = state.engine.lock().unwrap();
-    let info = engine.get_orderbook_state();
+    let Some(info) = engine.get_orderbook_state(query.instrument_id) else {
+        return unknown_instrument(query.instrument_id);
+    };
     let bids = info
         .get_bids()
         .iter()
@@ -202,11 +227,20 @@ pub async fn orderbook(state: web::Data<AppState>) -> impl Responder {
     HttpResponse::Ok().json(OrderbookResponse { bids, asks })
 }
 
-pub async fn top_of_book(state: web::Data<AppState>) -> impl Responder {
+pub async fn top_of_book(
+    state: web::Data<AppState>,
+    query: web::Query<InstrumentQuery>,
+) -> impl Responder {
+    if query.instrument_id == 0 {
+        return bad_request("instrument_id must be greater than 0");
+    }
     let engine = state.engine.lock().unwrap();
+    if !engine.is_registered(query.instrument_id) {
+        return unknown_instrument(query.instrument_id);
+    }
     HttpResponse::Ok().json(TopOfBookResponse {
-        best_bid: engine.best_bid(),
-        best_ask: engine.best_ask(),
+        best_bid: engine.best_bid(query.instrument_id),
+        best_ask: engine.best_ask(query.instrument_id),
     })
 }
 

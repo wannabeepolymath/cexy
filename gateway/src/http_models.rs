@@ -41,6 +41,11 @@ pub struct CancelOrderQuery {
     pub request_id: u64,
 }
 
+#[derive(Deserialize)]
+pub struct InstrumentQuery {
+    pub instrument_id: u32,
+}
+
 #[derive(Serialize)]
 pub struct OrderResult {
     pub trades: usize,

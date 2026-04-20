@@ -41,6 +41,27 @@ pub enum Command {
     },
 }
 
+impl Command {
+    pub fn instrument_id(&self) -> InstrumentId {
+        match self {
+            Command::PlaceOrder { instrument_id, .. }
+            | Command::CancelOrder { instrument_id, .. }
+            | Command::CancelOrders { instrument_id, .. }
+            | Command::ModifyOrder { instrument_id, .. } => *instrument_id,
+        }
+    }
+}
+
+/// Infrastructure-level errors surfaced by [`crate::engine::Engine::execute`].
+///
+/// Distinct from per-command business rejects (e.g. [`PlaceOrderReject`]):
+/// these represent routing/plumbing failures rather than matching outcomes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum EngineError {
+    #[error("unknown instrument: {0}")]
+    UnknownInstrument(InstrumentId),
+}
+
 /// Result of [`Command`] dispatch; discriminant matches [`Command`].
 #[derive(Debug)]
 pub enum CommandOutput {

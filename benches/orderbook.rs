@@ -1,4 +1,5 @@
 use criterion::{black_box, BatchSize, Criterion};
+use engine::commands::{Command, CommandOutput, InstrumentId};
 use engine::engine::Engine;
 use engine::orderbook::order::Order;
 use engine::orderbook::order_modify::OrderModify;
@@ -6,6 +7,31 @@ use engine::orderbook::order_type::OrderType;
 use engine::orderbook::orderbook::Orderbook;
 use engine::orderbook::side::Side;
 use engine::orderbook::types::{OrderId, Price, Quantity};
+
+const BENCH_INSTRUMENT_ID: InstrumentId = 1;
+
+fn make_engine() -> Engine {
+    let mut engine = Engine::new();
+    engine.register_instrument(BENCH_INSTRUMENT_ID);
+    engine
+}
+
+fn engine_place_order(engine: &mut Engine, order: Order) {
+    match engine
+        .execute(Command::PlaceOrder {
+            instrument_id: BENCH_INSTRUMENT_ID,
+            account_id: 1,
+            request_id: 1,
+            order,
+        })
+        .expect("registered instrument routes")
+    {
+        CommandOutput::PlaceOrder(result) => {
+            result.expect("bench place_order must succeed");
+        }
+        _ => unreachable!("execute must return PlaceOrder output for PlaceOrder command"),
+    }
+}
 use serde::Deserialize;
 use std::env;
 use std::fs;
@@ -107,9 +133,7 @@ fn seed_engine(
     for level in 0..levels {
         let price = start_price + price_step * level as Price;
         for _ in 0..orders_per_level {
-            engine
-                .place_order(make_limit_order(next_id, side, price, quantity))
-                .unwrap();
+            engine_place_order(engine, make_limit_order(next_id, side, price, quantity));
             next_id += 1;
         }
     }
@@ -323,7 +347,7 @@ fn bench_engine_place_order(c: &mut Criterion) {
     group.bench_function("place_order", |b| {
         b.iter_batched(
             || {
-                let mut engine = Engine::new();
+                let mut engine = make_engine();
                 let next_id = seed_engine(
                     &mut engine,
                     1,
@@ -338,7 +362,8 @@ fn bench_engine_place_order(c: &mut Criterion) {
                 (engine, order)
             },
             |(mut engine, order)| {
-                black_box(engine.place_order(order).unwrap());
+                engine_place_order(&mut engine, order);
+                black_box(&engine);
             },
             BatchSize::SmallInput,
         );
@@ -347,7 +372,7 @@ fn bench_engine_place_order(c: &mut Criterion) {
 }
 
 fn bench_engine_get_state(c: &mut Criterion) {
-    let mut engine = Engine::new();
+    let mut engine = make_engine();
     let next_id = seed_engine(
         &mut engine,
         1,
@@ -372,7 +397,7 @@ fn bench_engine_get_state(c: &mut Criterion) {
     let mut group = c.benchmark_group("engine");
     group.bench_function("get_orderbook_state", |b| {
         b.iter(|| {
-            black_box(engine.get_orderbook_state());
+            black_box(engine.get_orderbook_state(BENCH_INSTRUMENT_ID));
         });
     });
     group.finish();

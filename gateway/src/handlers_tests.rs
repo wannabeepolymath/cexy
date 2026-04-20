@@ -9,8 +9,10 @@ mod tests {
     use crate::handlers::configure;
 
     fn app_state() -> web::Data<AppState> {
+        let mut engine = Engine::new();
+        engine.register_instrument(1);
         web::Data::new(AppState {
-            engine: Mutex::new(Engine::new()),
+            engine: Mutex::new(engine),
         })
     }
 
@@ -73,6 +75,29 @@ mod tests {
         assert_eq!(modify_resp.status(), StatusCode::BAD_REQUEST);
         let body: Value = test::read_body_json(modify_resp).await;
         assert_eq!(body["error"], "side change not allowed on modify");
+    }
+
+    #[actix_web::test]
+    async fn create_order_returns_not_found_for_unregistered_instrument() {
+        let app = test::init_service(App::new().app_data(app_state()).configure(configure)).await;
+        let req = test::TestRequest::post()
+            .uri("/api/v1/order")
+            .set_json(json!({
+                "instrument_id": 99,
+                "account_id": 42,
+                "request_id": 1,
+                "order_id": 1,
+                "side": "buy",
+                "order_type": "limit",
+                "price": 100,
+                "quantity": 10
+            }))
+            .to_request();
+
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        let body: Value = test::read_body_json(resp).await;
+        assert_eq!(body["error"], "unknown instrument: 99");
     }
 
     #[actix_web::test]
