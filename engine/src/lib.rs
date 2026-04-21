@@ -12,4 +12,4 @@ pub use commands::{
     PlaceOrderResult, PlaceOrderSuccess,
 };
 pub use events::{Event, EventSeq, Events, RejectReason};
-pub use shard::{ExecuteReply, Shard, ShardId, ShardReply, ShardRequest};
+pub use shard::{ExecuteReply, Shard, ShardError, ShardId, ShardReply, ShardRequest, ShardThread};

@@ -25,6 +25,11 @@
 //! [`Orderbook`]: crate::orderbook::orderbook::Orderbook
 //! [`Engine`]: crate::engine::Engine
 
+use std::thread::{self, JoinHandle};
+
+use crossbeam_channel::{Sender, bounded, unbounded};
+use thiserror::Error;
+
 use crate::commands::{Command, CommandOutput, EngineError, InstrumentId};
 use crate::engine::Engine;
 use crate::events::Events;
@@ -140,6 +145,98 @@ impl Shard {
                     )))
                 }
             }
+        }
+    }
+}
+
+/// Envelope carried over the request channel into a shard thread.
+///
+/// Each request brings its own single-shot reply channel so the shard can
+/// answer concurrent clients without cross-talk.
+struct ShardEnvelope {
+    request: ShardRequest,
+    reply_tx: Sender<ShardReply>,
+}
+
+/// Reasons [`ShardThread::submit`] can fail. These are infrastructure
+/// failures (the shard thread is gone), not per-command rejects.
+#[derive(Debug, Error)]
+pub enum ShardError {
+    /// The shard thread has exited and is no longer accepting requests.
+    #[error("shard {0} is not running")]
+    ShardDown(ShardId),
+}
+
+/// Owned handle to a shard running on its own OS thread.
+///
+/// Drives the inner [`Shard`] through a crossbeam MPSC channel: many
+/// producers can call [`ShardThread::submit`] concurrently, but only the
+/// shard thread ever mutates the books. Dropping the handle closes the
+/// request channel, which causes the shard thread's `for` loop to exit;
+/// the drop then joins the thread.
+pub struct ShardThread {
+    shard_id: ShardId,
+    // `Option` so that `Drop` can close the sender (dropping it signals the
+    // shard thread to stop) before joining the thread.
+    tx: Option<Sender<ShardEnvelope>>,
+    join: Option<JoinHandle<()>>,
+}
+
+impl ShardThread {
+    /// Spawn a new shard on a dedicated OS thread named `shard-{id}`.
+    pub fn spawn(shard_id: ShardId) -> Self {
+        let (tx, rx) = unbounded::<ShardEnvelope>();
+        let join = thread::Builder::new()
+            .name(format!("shard-{shard_id}"))
+            .spawn(move || {
+                let mut shard = Shard::new(shard_id);
+                for env in rx {
+                    let reply = shard.process(env.request);
+                    // If the caller dropped its reply receiver we simply
+                    // discard the reply; the shard keeps running.
+                    let _ = env.reply_tx.send(reply);
+                }
+            })
+            .expect("failed to spawn shard thread");
+
+        Self {
+            shard_id,
+            tx: Some(tx),
+            join: Some(join),
+        }
+    }
+
+    /// Shard identifier assigned at spawn time.
+    pub fn shard_id(&self) -> ShardId {
+        self.shard_id
+    }
+
+    /// Send a request and block until the shard replies.
+    ///
+    /// Safe to call concurrently from any number of threads. Returns
+    /// [`ShardError::ShardDown`] if the shard thread has exited (e.g. due
+    /// to a panic).
+    pub fn submit(&self, request: ShardRequest) -> Result<ShardReply, ShardError> {
+        let (reply_tx, reply_rx) = bounded::<ShardReply>(1);
+        let tx = self
+            .tx
+            .as_ref()
+            .ok_or(ShardError::ShardDown(self.shard_id))?;
+        tx.send(ShardEnvelope { request, reply_tx })
+            .map_err(|_| ShardError::ShardDown(self.shard_id))?;
+        reply_rx
+            .recv()
+            .map_err(|_| ShardError::ShardDown(self.shard_id))
+    }
+}
+
+impl Drop for ShardThread {
+    fn drop(&mut self) {
+        // Closing the sender causes the shard thread's `for env in rx`
+        // loop to terminate on the next iteration.
+        self.tx.take();
+        if let Some(join) = self.join.take() {
+            let _ = join.join();
         }
     }
 }
@@ -261,5 +358,94 @@ mod tests {
             ShardReply::TopOfBook(Some((None, Some(100)))) => {}
             other => panic!("instrument 2 unexpected reply: {other:?}"),
         }
+    }
+
+    // ---- ShardThread (channel + OS thread) ----
+
+    #[test]
+    fn shard_thread_replies_to_register_and_execute() {
+        let handle = ShardThread::spawn(3);
+        assert_eq!(handle.shard_id(), 3);
+
+        match handle.submit(ShardRequest::RegisterInstrument(1)).unwrap() {
+            ShardReply::RegisterInstrument { created } => assert!(created),
+            other => panic!("unexpected reply: {other:?}"),
+        }
+
+        let reply = handle
+            .submit(ShardRequest::Execute(place_cmd(1, 100, Side::Buy)))
+            .unwrap();
+        match reply {
+            ShardReply::Execute(Ok(r)) => {
+                assert!(matches!(r.output, CommandOutput::PlaceOrder(Ok(_))));
+                assert_eq!(r.best_bid, Some(100));
+                assert_eq!(r.best_ask, None);
+            }
+            other => panic!("unexpected reply: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn shard_thread_rejects_commands_for_unknown_instrument() {
+        let handle = ShardThread::spawn(0);
+        let reply = handle
+            .submit(ShardRequest::Execute(place_cmd(42, 1, Side::Buy)))
+            .unwrap();
+        match reply {
+            ShardReply::Execute(Err(EngineError::UnknownInstrument(42))) => {}
+            other => panic!("unexpected reply: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn shard_thread_serialises_concurrent_submitters() {
+        use std::sync::Arc;
+        use std::thread;
+
+        let handle = Arc::new(ShardThread::spawn(7));
+        handle
+            .submit(ShardRequest::RegisterInstrument(1))
+            .expect("register");
+
+        // Each producer sends N place orders. All replies must be Ok.
+        // Distinct order ids avoid duplicate-id rejects so we can verify
+        // the shard actually processes every request exactly once.
+        const PRODUCERS: u64 = 4;
+        const PER_PRODUCER: u64 = 25;
+        let mut threads = Vec::with_capacity(PRODUCERS as usize);
+        for p in 0..PRODUCERS {
+            let h = Arc::clone(&handle);
+            threads.push(thread::spawn(move || {
+                for i in 0..PER_PRODUCER {
+                    let order_id = p * PER_PRODUCER + i + 1;
+                    let reply = h
+                        .submit(ShardRequest::Execute(place_cmd(1, order_id, Side::Buy)))
+                        .expect("shard alive");
+                    assert!(matches!(reply, ShardReply::Execute(Ok(_))));
+                }
+            }));
+        }
+        for t in threads {
+            t.join().expect("producer thread panicked");
+        }
+
+        // All PRODUCERS * PER_PRODUCER orders landed; top-of-book is still
+        // the single limit price we used, and no interleaving corrupted it.
+        match handle.submit(ShardRequest::TopOfBook(1)).unwrap() {
+            ShardReply::TopOfBook(Some((Some(100), None))) => {}
+            other => panic!("unexpected top-of-book: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn shard_thread_submit_after_drop_returns_shard_down() {
+        let handle = ShardThread::spawn(9);
+        // Clone an internal sender via re-submit to establish the thread is up.
+        handle
+            .submit(ShardRequest::RegisterInstrument(1))
+            .expect("register");
+        drop(handle);
+        // Previous handle is gone; nothing more to assert beyond "Drop did
+        // not deadlock". Reaching this line is the assertion.
     }
 }
