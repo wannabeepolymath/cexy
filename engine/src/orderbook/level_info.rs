@@ -1,5 +1,6 @@
 use crate::orderbook::types::{Price, Quantity};
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LevelInfo {
     pub price: Price,
     pub quantity: Quantity,
@@ -14,6 +15,7 @@ impl LevelInfo {
 pub type LevelInfos = Vec<LevelInfo>;
 
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OrderbookLevelInfo {
     bids: LevelInfos,
     asks: LevelInfos,

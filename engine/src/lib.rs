@@ -4,6 +4,7 @@ pub mod engine;
 mod engine_tests;
 pub mod events;
 pub mod orderbook;
+pub mod shard;
 
 pub use commands::{
     CancelOrderResult, CancelOrdersSummary, Command, CommandOutput, EngineError, ExecuteResult,
@@ -11,3 +12,4 @@ pub use commands::{
     PlaceOrderResult, PlaceOrderSuccess,
 };
 pub use events::{Event, EventSeq, Events, RejectReason};
+pub use shard::{ExecuteReply, Shard, ShardId, ShardReply, ShardRequest};
