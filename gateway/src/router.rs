@@ -30,6 +30,7 @@
 //! [`ShardMap`]: engine::shard_map::ShardMap
 
 use engine::commands::{Command, EngineError, InstrumentId};
+use engine::event_bus::EventSender;
 use engine::orderbook::level_info::OrderbookLevelInfo;
 use engine::orderbook::types::Price;
 use engine::shard::{ExecuteReply, ShardReply, ShardRequest, ShardThread};
@@ -56,16 +57,43 @@ pub struct Router {
 
 impl Router {
     /// Build a router with `shard_count` freshly-spawned shard threads and
-    /// the default modulo routing map.
+    /// the default modulo routing map. Shards do not publish events
+    /// anywhere; use [`Router::new_with_events`] to attach an event bus.
+    ///
+    /// Kept primarily for tests that don't need an event pipeline. The
+    /// production binary uses [`Router::new_with_events`].
+    #[allow(dead_code)]
     pub fn new(shard_count: u16) -> Result<Self, RouterError> {
         let map = ShardMap::new(shard_count)?;
         Ok(Self::with_map(map))
     }
 
+    /// Like [`Router::new`] but every shard publishes its events to
+    /// `event_tx`. The router itself does not read events; the bus owns
+    /// the consumer thread.
+    pub fn new_with_events(
+        shard_count: u16,
+        event_tx: EventSender,
+    ) -> Result<Self, RouterError> {
+        let map = ShardMap::new(shard_count)?;
+        Ok(Self::with_map_and_events(map, event_tx))
+    }
+
     /// Build a router around an explicit [`ShardMap`]. The number of
-    /// shards spawned equals [`ShardMap::shard_count`].
+    /// shards spawned equals [`ShardMap::shard_count`]. No event
+    /// publication; see [`Router::with_map_and_events`].
+    #[allow(dead_code)]
     pub fn with_map(map: ShardMap) -> Self {
         let shards = (0..map.shard_count()).map(ShardThread::spawn).collect();
+        Self { shards, map }
+    }
+
+    /// Like [`Router::with_map`] but each spawned shard receives its own
+    /// clone of `event_tx` and publishes events through it.
+    pub fn with_map_and_events(map: ShardMap, event_tx: EventSender) -> Self {
+        let shards = (0..map.shard_count())
+            .map(|shard_id| ShardThread::spawn_with_events(shard_id, event_tx.clone()))
+            .collect();
         Self { shards, map }
     }
 
@@ -222,5 +250,76 @@ mod tests {
         router.register_instrument(1);
         let reply = router.submit(place_cmd(1, 1, Side::Buy, 100)).unwrap();
         assert!(matches!(reply.output, CommandOutput::PlaceOrder(Ok(_))));
+    }
+
+    #[test]
+    fn events_from_both_shards_reach_single_consumer_in_per_instrument_order() {
+        use engine::event_bus::{EventBus, EventConsumer};
+        use engine::events::Event;
+        use std::sync::{Arc, Mutex};
+
+        struct VecConsumer(Arc<Mutex<Vec<Event>>>);
+        impl EventConsumer for VecConsumer {
+            fn consume(&mut self, event: Event) {
+                self.0.lock().unwrap().push(event);
+            }
+        }
+
+        let collected = Arc::new(Mutex::new(Vec::<Event>::new()));
+        let bus = EventBus::new(VecConsumer(Arc::clone(&collected)));
+        let router = Router::new_with_events(2, bus.sender()).unwrap();
+
+        // One instrument per shard under modulo mapping.
+        assert_eq!(router.shard_map().shard_for(1), 1);
+        assert_eq!(router.shard_map().shard_for(2), 0);
+        assert!(router.register_instrument(1));
+        assert!(router.register_instrument(2));
+
+        // A few place commands on each instrument so both shards produce
+        // multiple events, enough to catch an ordering regression.
+        for i in 0..5 {
+            router
+                .submit(place_cmd(1, 100 + i, Side::Buy, 100))
+                .unwrap();
+            router
+                .submit(place_cmd(2, 200 + i, Side::Sell, 200))
+                .unwrap();
+        }
+
+        // Shut down in order: router first (closes shard senders, which
+        // flushes any in-flight events to the bus), then the bus (closes
+        // the event channel, joins the consumer thread).
+        drop(router);
+        drop(bus);
+
+        let got = collected.lock().unwrap();
+        assert!(got.len() >= 10, "too few events collected: {}", got.len());
+
+        // Per-instrument ordering: seqs for each instrument must be
+        // strictly monotonic in arrival order.
+        let mut seqs_1: Vec<_> = got
+            .iter()
+            .filter(|e| e.instrument_id() == 1)
+            .map(|e| e.seq())
+            .collect();
+        let mut seqs_2: Vec<_> = got
+            .iter()
+            .filter(|e| e.instrument_id() == 2)
+            .map(|e| e.seq())
+            .collect();
+
+        // Every event should belong to either instrument 1 or 2.
+        assert_eq!(seqs_1.len() + seqs_2.len(), got.len());
+        assert!(!seqs_1.is_empty());
+        assert!(!seqs_2.is_empty());
+
+        // Monotonic within each instrument.
+        let check_monotonic = |seqs: &mut Vec<u64>| {
+            for pair in seqs.windows(2) {
+                assert!(pair[0] < pair[1], "seq regressed: {seqs:?}");
+            }
+        };
+        check_monotonic(&mut seqs_1);
+        check_monotonic(&mut seqs_2);
     }
 }

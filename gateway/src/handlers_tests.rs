@@ -2,6 +2,8 @@
 mod tests {
     use actix_web::{App, http::StatusCode, test, web};
     use engine::engine::Engine;
+    use engine::event_bus::{EventBus, EventConsumer};
+    use engine::events::Event;
     use serde_json::{Value, json};
     use std::sync::Arc;
 
@@ -9,11 +11,23 @@ mod tests {
     use crate::engine_handle::MutexEngineHandle;
     use crate::handlers::configure;
 
+    /// Discards every event. Keeps the consumer thread alive without
+    /// polluting test output.
+    struct NullConsumer;
+    impl EventConsumer for NullConsumer {
+        fn consume(&mut self, _event: Event) {}
+    }
+
+    fn test_event_bus() -> Arc<EventBus> {
+        Arc::new(EventBus::new(NullConsumer))
+    }
+
     fn app_state() -> web::Data<AppState> {
         let mut engine = Engine::new();
         engine.register_instrument(1);
         web::Data::new(AppState {
             engine: Arc::new(MutexEngineHandle::new(engine)),
+            _event_bus: test_event_bus(),
         })
     }
 
@@ -183,10 +197,12 @@ mod tests {
         use crate::engine_handle::EngineHandle;
         use crate::router::Router;
 
-        let router = Router::new(2).expect("router");
+        let event_bus = test_event_bus();
+        let router = Router::new_with_events(2, event_bus.sender()).expect("router");
         assert!(router.register_instrument(1));
         let state: web::Data<AppState> = web::Data::new(AppState {
             engine: Arc::new(router),
+            _event_bus: event_bus,
         });
         let app = test::init_service(App::new().app_data(state).configure(configure)).await;
 

@@ -32,6 +32,7 @@ use thiserror::Error;
 
 use crate::commands::{Command, CommandOutput, EngineError, InstrumentId};
 use crate::engine::Engine;
+use crate::event_bus::EventSender;
 use crate::events::Events;
 use crate::orderbook::level_info::OrderbookLevelInfo;
 use crate::orderbook::types::Price;
@@ -183,8 +184,30 @@ pub struct ShardThread {
 }
 
 impl ShardThread {
-    /// Spawn a new shard on a dedicated OS thread named `shard-{id}`.
+    /// Spawn a new shard on a dedicated OS thread named `shard-{id}`,
+    /// with no connection to any event bus. Events produced by commands
+    /// are still returned in [`ShardReply::Execute`] but are not published
+    /// anywhere.
     pub fn spawn(shard_id: ShardId) -> Self {
+        Self::spawn_inner(shard_id, None)
+    }
+
+    /// Spawn a shard and publish every event it produces to `event_tx`
+    /// before replying to the submitter.
+    ///
+    /// Because the shard thread is the sole producer on its `event_tx`
+    /// clone and serialises all processing, events arrive on the consumer
+    /// side in the same order the shard emitted them. This gives us
+    /// per-shard (and therefore per-instrument) ordering for free.
+    ///
+    /// Publishing happens _before_ the reply to the submitter, so a client
+    /// that observes a command's reply can assume its events have already
+    /// been handed to the bus.
+    pub fn spawn_with_events(shard_id: ShardId, event_tx: EventSender) -> Self {
+        Self::spawn_inner(shard_id, Some(event_tx))
+    }
+
+    fn spawn_inner(shard_id: ShardId, event_tx: Option<EventSender>) -> Self {
         let (tx, rx) = unbounded::<ShardEnvelope>();
         let join = thread::Builder::new()
             .name(format!("shard-{shard_id}"))
@@ -192,6 +215,17 @@ impl ShardThread {
                 let mut shard = Shard::new(shard_id);
                 for env in rx {
                     let reply = shard.process(env.request);
+                    if let Some(event_tx) = &event_tx
+                        && let ShardReply::Execute(Ok(ExecuteReply { events, .. })) = &reply
+                    {
+                        // A closed consumer side means the bus is being
+                        // shut down; drop events silently rather than
+                        // killing the shard. Panic isolation / alerting
+                        // is Phase 9 work.
+                        for event in events {
+                            let _ = event_tx.send(event.clone());
+                        }
+                    }
                     // If the caller dropped its reply receiver we simply
                     // discard the reply; the shard keeps running.
                     let _ = env.reply_tx.send(reply);
@@ -447,5 +481,77 @@ mod tests {
         drop(handle);
         // Previous handle is gone; nothing more to assert beyond "Drop did
         // not deadlock". Reaching this line is the assertion.
+    }
+
+    // ---- ShardThread + event bus wiring ----
+
+    #[test]
+    fn shard_thread_with_events_publishes_in_per_shard_order() {
+        use crate::event_bus::EventBus;
+        use crate::event_bus::EventConsumer;
+        use std::sync::{Arc, Mutex};
+        use std::time::{Duration, Instant};
+
+        struct VecConsumer(Arc<Mutex<Vec<crate::events::Event>>>);
+        impl EventConsumer for VecConsumer {
+            fn consume(&mut self, event: crate::events::Event) {
+                self.0.lock().unwrap().push(event);
+            }
+        }
+
+        let collected = Arc::new(Mutex::new(Vec::<crate::events::Event>::new()));
+        let bus = EventBus::new(VecConsumer(Arc::clone(&collected)));
+        let handle = ShardThread::spawn_with_events(0, bus.sender());
+
+        handle
+            .submit(ShardRequest::RegisterInstrument(1))
+            .expect("register");
+        // Two place commands, each produces its own burst of events.
+        handle
+            .submit(ShardRequest::Execute(place_cmd(1, 10, Side::Buy)))
+            .expect("place 10");
+        handle
+            .submit(ShardRequest::Execute(place_cmd(1, 11, Side::Buy)))
+            .expect("place 11");
+
+        // Drop the shard so its sender clone is closed, then drop the bus
+        // so we know the consumer thread has drained everything.
+        drop(handle);
+        drop(bus);
+
+        let got = collected.lock().unwrap();
+        assert!(!got.is_empty(), "expected events from shard thread");
+
+        // Per-shard order = monotonically increasing event seq.
+        let seqs: Vec<_> = got.iter().map(|e| e.seq()).collect();
+        for pair in seqs.windows(2) {
+            assert!(pair[0] < pair[1], "event seq regressed: {seqs:?}");
+        }
+        // All events belong to instrument 1 (only instrument registered).
+        assert!(got.iter().all(|e| e.instrument_id() == 1));
+
+        // Timeout protection for the whole test (in case the consumer
+        // thread was somehow starved before we got here).
+        let deadline = Instant::now() + Duration::from_secs(2);
+        assert!(Instant::now() < deadline);
+    }
+
+    #[test]
+    fn shard_thread_without_events_still_returns_them_in_reply() {
+        // spawn() (no event bus) must still populate ExecuteReply.events,
+        // so direct-consumer tests and the HTTP layer keep working.
+        let handle = ShardThread::spawn(0);
+        handle
+            .submit(ShardRequest::RegisterInstrument(1))
+            .expect("register");
+        let reply = handle
+            .submit(ShardRequest::Execute(place_cmd(1, 1, Side::Buy)))
+            .unwrap();
+        match reply {
+            ShardReply::Execute(Ok(r)) => {
+                assert!(!r.events.is_empty(), "expected events in reply");
+            }
+            other => panic!("unexpected reply: {other:?}"),
+        }
     }
 }

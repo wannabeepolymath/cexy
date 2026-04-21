@@ -3,6 +3,7 @@ use std::sync::Arc;
 use actix_web::{App, HttpServer, web};
 use app_state::AppState;
 use config::GatewayConfig;
+use engine::event_bus::{EventBus, LoggingConsumer};
 use engine_handle::EngineHandle;
 use router::Router;
 
@@ -35,7 +36,13 @@ async fn main() -> std::io::Result<()> {
         }
     };
 
-    let router = match Router::new(DEFAULT_SHARD_COUNT) {
+    // Start the event bus before the router so the router can hand its
+    // sender clones to every shard at spawn time. The bus is kept alive
+    // inside `AppState` for the lifetime of the HTTP server: dropping it
+    // would close the event channel and stop the consumer thread.
+    let event_bus = EventBus::new(LoggingConsumer);
+
+    let router = match Router::new_with_events(DEFAULT_SHARD_COUNT, event_bus.sender()) {
         Ok(router) => router,
         Err(err) => {
             eprintln!("Failed to build router: {err}");
@@ -53,7 +60,10 @@ async fn main() -> std::io::Result<()> {
     );
 
     let handle: Arc<dyn EngineHandle> = Arc::new(router);
-    let state = web::Data::new(AppState { engine: handle });
+    let state = web::Data::new(AppState {
+        engine: handle,
+        _event_bus: Arc::new(event_bus),
+    });
 
     println!("Gateway listening on http://{bind_addr}");
 

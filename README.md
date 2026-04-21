@@ -1,5 +1,7 @@
 # exchange-project-rs
 
+(work in progress)
+
 Experimental Rust exchange components: matching engine, orderbook, API gateway,
 and benchmarks.
 
