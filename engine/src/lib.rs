@@ -5,6 +5,7 @@ mod engine_tests;
 pub mod events;
 pub mod orderbook;
 pub mod shard;
+pub mod shard_map;
 
 pub use commands::{
     CancelOrderResult, CancelOrdersSummary, Command, CommandOutput, EngineError, ExecuteResult,
@@ -13,3 +14,4 @@ pub use commands::{
 };
 pub use events::{Event, EventSeq, Events, RejectReason};
 pub use shard::{ExecuteReply, Shard, ShardError, ShardId, ShardReply, ShardRequest, ShardThread};
+pub use shard_map::{ShardMap, ShardMapError};
