@@ -1,18 +1,19 @@
 #[cfg(test)]
 mod tests {
-    use actix_web::{http::StatusCode, test, web, App};
+    use actix_web::{App, http::StatusCode, test, web};
     use engine::engine::Engine;
-    use serde_json::{json, Value};
-    use std::sync::Mutex;
+    use serde_json::{Value, json};
+    use std::sync::Arc;
 
     use crate::app_state::AppState;
+    use crate::engine_handle::MutexEngineHandle;
     use crate::handlers::configure;
 
     fn app_state() -> web::Data<AppState> {
         let mut engine = Engine::new();
         engine.register_instrument(1);
         web::Data::new(AppState {
-            engine: Mutex::new(engine),
+            engine: Arc::new(MutexEngineHandle::new(engine)),
         })
     }
 

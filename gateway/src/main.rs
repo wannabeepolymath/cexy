@@ -1,18 +1,20 @@
-use actix_web::{web, App, HttpServer};
-use engine::engine::Engine;
-use std::sync::Mutex;
+use std::sync::Arc;
+
+use actix_web::{App, HttpServer, web};
 use app_state::AppState;
 use config::GatewayConfig;
+use engine::engine::Engine;
+use engine_handle::MutexEngineHandle;
 
 mod app_state;
 mod config;
+mod engine_handle;
 mod handlers;
 mod http_models;
 mod parsing;
 
 #[cfg(test)]
 mod handlers_tests;
-
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
@@ -37,9 +39,8 @@ async fn main() -> std::io::Result<()> {
         config.instruments
     );
 
-    let state = web::Data::new(AppState {
-        engine: Mutex::new(engine),
-    });
+    let handle: Arc<dyn engine_handle::EngineHandle> = Arc::new(MutexEngineHandle::new(engine));
+    let state = web::Data::new(AppState { engine: handle });
 
     println!("Gateway listening on http://{bind_addr}");
 
