@@ -15,6 +15,36 @@ Each of `engine/`, `gateway/`, and `benches/` is an independent Cargo package
 (there is no workspace root). Run `cargo` commands from within the relevant
 package directory.
 
+## Architecture
+
+```
+HTTP handlers ──► EngineHandle (trait) ──► Router ──► ShardThread(s) ──► Orderbook(s)
+                                                          │
+                                                          ▼
+                                                   EventBus ──► EventConsumer
+```
+
+- **Multi-instrument `Engine`**: holds a `HashMap<InstrumentId, Orderbook>`.
+  Instruments are registered explicitly; commands for unregistered
+  instruments return `EngineError::UnknownInstrument`.
+- **Shards (one-writer-per-shard)**: each `ShardThread` owns a disjoint
+  subset of instruments and processes requests serially on a dedicated
+  OS thread over a `crossbeam-channel`. Only that thread ever mutates
+  its books, so per-instrument operations need no locking.
+- **Router**: resolves `InstrumentId → ShardId` via a static `ShardMap`
+  (modulo default + optional overrides for pinning hot symbols) and
+  forwards each request to exactly one shard.
+- **`EngineHandle` trait**: the HTTP layer depends on the trait, not the
+  concrete engine, so the router implementation can be swapped without
+  touching handlers. A `MutexEngineHandle` alternative exists for tests.
+- **Event bus**: every mutating command produces an ordered stream of
+  `Event`s (`OrderAccepted`, `OrderRejected`, `OrderCanceled`,
+  `TradeExecuted`, `TopOfBookUpdated`). Each shard thread publishes its
+  events through a cloned `EventSender` into a single `EventBus`, whose
+  dedicated consumer thread drives an `EventConsumer` (the default is
+  `LoggingConsumer`). Per-shard (and therefore per-instrument) order is
+  preserved; cross-shard order is not defined.
+
 ## Quickstart
 
 ### Build everything
@@ -66,6 +96,15 @@ Validation rules applied at startup:
 | --- | --- | --- |
 | `GATEWAY_BIND` | `127.0.0.1:8080` | Listen address |
 | `GATEWAY_CONFIG` | _unset_ | Path to JSON config file |
+
+### Shards and event bus
+At boot the gateway spins up a fixed number of shard threads (default `2`)
+behind a `Router` that owns a `ShardMap` for `InstrumentId → ShardId`
+routing (modulo by default). Every configured and admin-registered
+instrument is pinned to a shard on registration. An `EventBus` is started
+alongside the router with a `LoggingConsumer`; every shard's events flow
+through it on a dedicated consumer thread. Graceful shutdown, backpressure,
+and panic isolation are not implemented yet (Phase 9).
 
 ### Run locally
 ```
@@ -194,13 +233,15 @@ The engine is a library crate used by the gateway and benchmarks.
 
 ### Canonical command shape
 ```rust
-use engine::commands::{Command, CommandOutput, EngineError};
+use engine::commands::{Command, ExecuteResult, EngineError};
 
 let mut engine = engine::engine::Engine::new();
 engine.register_instrument(1);
 
-let result: Result<CommandOutput, EngineError> =
+let result: Result<ExecuteResult, EngineError> =
     engine.execute(Command::PlaceOrder { /* ... */ });
+// result.output  : CommandOutput (PlaceOrder/CancelOrder/...)
+// result.events  : Vec<Event> emitted by this command, in per-book order
 ```
 
 ### Instrument lifecycle
@@ -214,6 +255,18 @@ All getters take an `InstrumentId` and return `Option`:
 - `best_ask(id) -> Option<Price>`
 - `order_count(id) -> Option<usize>`
 - `get_orderbook_state(id) -> Option<OrderbookLevelInfo>`
+
+### Module map
+- `commands` — `Command`, `CommandOutput`, `ExecuteResult`, `EngineError`.
+- `events` — `Event` variants, `EventSeq`, `RejectReason`.
+- `event_bus` — `EventBus`, `EventConsumer` trait, `EventSender`,
+  `LoggingConsumer`.
+- `orderbook` — single-instrument matching core.
+- `engine` — multi-instrument `Engine` wrapping one book per instrument.
+- `shard` — `Shard`, `ShardRequest` / `ShardReply`, `ShardThread`
+  (OS-thread wrapper that publishes events to an `EventBus`).
+- `shard_map` — static `InstrumentId → ShardId` table with modulo
+  default + per-instrument overrides.
 
 ## Benchmarks
 
@@ -244,7 +297,11 @@ cargo run --release --bin order_ops -- \
   --output bench-operations-results.md
 ```
 
-### Latest results (pre-multi-instrument baseline)
+### Latest results (pre-multi-instrument, pre-shard baseline)
+> Captured before the multi-instrument engine, shard workers, router, and
+> event bus landed. Refreshed numbers will be published after Phase 8
+> (shard-aware benchmarks).
+
 Orderbook benchmark report (`benches/bench-orderbook-report-1775567407.md`):
 | Group | Benchmark | Mean (ns) | Median (ns) | Ops/sec (mean) |
 | --- | --- | --- | --- | --- |
