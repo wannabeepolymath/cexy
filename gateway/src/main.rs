@@ -3,8 +3,8 @@ use std::sync::Arc;
 use actix_web::{App, HttpServer, web};
 use app_state::AppState;
 use config::GatewayConfig;
-use engine::engine::Engine;
-use engine_handle::MutexEngineHandle;
+use engine_handle::EngineHandle;
+use router::Router;
 
 mod app_state;
 mod config;
@@ -12,9 +12,15 @@ mod engine_handle;
 mod handlers;
 mod http_models;
 mod parsing;
+mod router;
 
 #[cfg(test)]
 mod handlers_tests;
+
+/// Default number of shard threads the gateway spins up when no override is
+/// provided. Chosen small (2) to make concurrency behaviour easy to reason
+/// about and benchmark until we have numbers that justify more.
+const DEFAULT_SHARD_COUNT: u16 = 2;
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
@@ -29,17 +35,24 @@ async fn main() -> std::io::Result<()> {
         }
     };
 
-    let mut engine = Engine::new();
+    let router = match Router::new(DEFAULT_SHARD_COUNT) {
+        Ok(router) => router,
+        Err(err) => {
+            eprintln!("Failed to build router: {err}");
+            std::process::exit(1);
+        }
+    };
     for instrument_id in &config.instruments {
-        engine.register_instrument(*instrument_id);
+        router.register_instrument(*instrument_id);
     }
     println!(
-        "Gateway registered {} instrument(s): {:?}",
+        "Gateway router: {} shard(s), {} instrument(s) registered: {:?}",
+        router.shard_count(),
         config.instruments.len(),
         config.instruments
     );
 
-    let handle: Arc<dyn engine_handle::EngineHandle> = Arc::new(MutexEngineHandle::new(engine));
+    let handle: Arc<dyn EngineHandle> = Arc::new(router);
     let state = web::Data::new(AppState { engine: handle });
 
     println!("Gateway listening on http://{bind_addr}");

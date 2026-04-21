@@ -173,5 +173,83 @@ mod tests {
         let body: Value = test::read_body_json(resp).await;
         assert_eq!(body["error"], "account_id must be greater than 0");
     }
+
+    /// Smoke test the router-backed pipeline (main.rs's actual wiring).
+    /// Proves that `Arc<dyn EngineHandle>` + [`crate::router::Router`] works
+    /// inside the actix test server for both data-plane (place order) and
+    /// control-plane (admin registration) requests.
+    #[actix_web::test]
+    async fn router_backed_state_drives_end_to_end_flow() {
+        use crate::engine_handle::EngineHandle;
+        use crate::router::Router;
+
+        let router = Router::new(2).expect("router");
+        assert!(router.register_instrument(1));
+        let state: web::Data<AppState> = web::Data::new(AppState {
+            engine: Arc::new(router),
+        });
+        let app = test::init_service(App::new().app_data(state).configure(configure)).await;
+
+        let place_req = test::TestRequest::post()
+            .uri("/api/v1/order")
+            .set_json(json!({
+                "instrument_id": 1,
+                "account_id": 1,
+                "request_id": 1,
+                "order_id": 1,
+                "side": "buy",
+                "order_type": "limit",
+                "price": 100,
+                "quantity": 10
+            }))
+            .to_request();
+        let place_resp = test::call_service(&app, place_req).await;
+        assert_eq!(place_resp.status(), StatusCode::OK);
+        let body: Value = test::read_body_json(place_resp).await;
+        assert_eq!(body["best_bid"], 100);
+        assert!(body["best_ask"].is_null());
+
+        // Instrument 2 still goes to a different shard via modulo, and
+        // must surface UnknownInstrument because we never registered it.
+        let reject_req = test::TestRequest::post()
+            .uri("/api/v1/order")
+            .set_json(json!({
+                "instrument_id": 2,
+                "account_id": 1,
+                "request_id": 1,
+                "order_id": 2,
+                "side": "buy",
+                "order_type": "limit",
+                "price": 100,
+                "quantity": 10
+            }))
+            .to_request();
+        let reject_resp = test::call_service(&app, reject_req).await;
+        assert_eq!(reject_resp.status(), StatusCode::NOT_FOUND);
+
+        // Register it via the admin endpoint and retry; now succeeds.
+        let admin_req = test::TestRequest::post()
+            .uri("/admin/instruments")
+            .set_json(json!({"instrument_id": 2}))
+            .to_request();
+        let admin_resp = test::call_service(&app, admin_req).await;
+        assert_eq!(admin_resp.status(), StatusCode::CREATED);
+
+        let retry_req = test::TestRequest::post()
+            .uri("/api/v1/order")
+            .set_json(json!({
+                "instrument_id": 2,
+                "account_id": 1,
+                "request_id": 2,
+                "order_id": 2,
+                "side": "buy",
+                "order_type": "limit",
+                "price": 100,
+                "quantity": 10
+            }))
+            .to_request();
+        let retry_resp = test::call_service(&app, retry_req).await;
+        assert_eq!(retry_resp.status(), StatusCode::OK);
+    }
 }
 
