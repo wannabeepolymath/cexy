@@ -81,12 +81,14 @@ pub async fn create_order(
 
     let mut engine = state.engine.lock().unwrap();
     let instrument_id = payload.instrument_id;
-    let result = engine.execute(Command::PlaceOrder {
-        instrument_id,
-        account_id: payload.account_id,
-        request_id: payload.request_id,
-        order,
-    });
+    let result = engine
+        .execute(Command::PlaceOrder {
+            instrument_id,
+            account_id: payload.account_id,
+            request_id: payload.request_id,
+            order,
+        })
+        .map(|r| r.output);
     match result {
         Ok(CommandOutput::PlaceOrder(Ok(success))) => HttpResponse::Ok().json(OrderResult {
             trades: success.trades.len(),
@@ -127,12 +129,14 @@ pub async fn modify_order(
     let modify = OrderModify::new(payload.order_id, side, payload.price, payload.quantity);
     let mut engine = state.engine.lock().unwrap();
     let instrument_id = payload.instrument_id;
-    let result = engine.execute(Command::ModifyOrder {
-        instrument_id,
-        account_id: payload.account_id,
-        request_id: payload.request_id,
-        modify,
-    });
+    let result = engine
+        .execute(Command::ModifyOrder {
+            instrument_id,
+            account_id: payload.account_id,
+            request_id: payload.request_id,
+            modify,
+        })
+        .map(|r| r.output);
     match result {
         Ok(CommandOutput::ModifyOrder(Ok(success))) => HttpResponse::Ok().json(OrderResult {
             trades: success.trades.len(),
@@ -175,12 +179,14 @@ pub async fn cancel_order(
 
     let mut engine = state.engine.lock().unwrap();
     let instrument_id = query.instrument_id;
-    let result = engine.execute(Command::CancelOrder {
-        instrument_id,
-        account_id: query.account_id,
-        request_id: query.request_id,
-        order_id,
-    });
+    let result = engine
+        .execute(Command::CancelOrder {
+            instrument_id,
+            account_id: query.account_id,
+            request_id: query.request_id,
+            order_id,
+        })
+        .map(|r| r.output);
     match result {
         Ok(CommandOutput::CancelOrder(CancelOrderResult::Cancelled)) => {
             HttpResponse::Ok().json(TopOfBookResponse {

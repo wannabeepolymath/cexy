@@ -3,6 +3,7 @@ use crate::commands::{
     CancelOrderResult, CancelOrdersSummary, InstrumentId, ModifyOrderReject, ModifyOrderResult,
     ModifyOrderSuccess, PlaceOrderReject, PlaceOrderResult, PlaceOrderSuccess,
 };
+use crate::events::{Event, Events, RejectReason};
 use crate::orderbook::types::{Price, Quantity, OrderId, OrderIds};
 use crate::orderbook::side::Side;
 use crate::orderbook::order_type::OrderType;
@@ -32,6 +33,8 @@ pub struct Orderbook {
     bids: BTreeMap<Price, OrderIdList>,
     asks: BTreeMap<Price, OrderIdList>,
     next_trade_seq: u64,
+    next_event_seq: u64,
+    pending_events: Events,
 }
 
 impl Orderbook {
@@ -43,11 +46,97 @@ impl Orderbook {
             bids: BTreeMap::new(),
             asks: BTreeMap::new(),
             next_trade_seq: 0,
+            next_event_seq: 0,
+            pending_events: Events::new(),
         }
     }
 
     pub fn instrument_id(&self) -> InstrumentId {
         self.instrument_id
+    }
+
+    /// Remove and return every event buffered since the last drain.
+    ///
+    /// Called by [`crate::engine::Engine::execute`] after each command to
+    /// assemble the [`crate::commands::ExecuteResult`].
+    pub fn drain_events(&mut self) -> Events {
+        std::mem::take(&mut self.pending_events)
+    }
+
+    /// Allocate the next per-book event sequence number.
+    ///
+    /// Sequence numbers are monotonically increasing and scoped to this
+    /// orderbook only; they are independent of `next_trade_seq`.
+    fn next_event_seq(&mut self) -> u64 {
+        let seq = self.next_event_seq;
+        self.next_event_seq = self.next_event_seq.saturating_add(1);
+        seq
+    }
+
+    // --- event emission helpers ------------------------------------------------
+
+    fn top_of_book_snapshot(&self) -> (Option<Price>, Option<Price>) {
+        (self.best_bid(), self.best_ask())
+    }
+
+    fn emit_top_of_book_if_changed(&mut self, before: (Option<Price>, Option<Price>)) {
+        let after = self.top_of_book_snapshot();
+        if before != after {
+            let seq = self.next_event_seq();
+            self.pending_events.push(Event::TopOfBookUpdated {
+                seq,
+                instrument_id: self.instrument_id,
+                best_bid: after.0,
+                best_ask: after.1,
+            });
+        }
+    }
+
+    fn emit_order_accepted(
+        &mut self,
+        order_id: OrderId,
+        side: Side,
+        price: Price,
+        quantity: Quantity,
+    ) {
+        let seq = self.next_event_seq();
+        self.pending_events.push(Event::OrderAccepted {
+            seq,
+            instrument_id: self.instrument_id,
+            order_id,
+            side,
+            price,
+            quantity,
+        });
+    }
+
+    fn emit_order_rejected(&mut self, order_id: OrderId, reason: RejectReason) {
+        let seq = self.next_event_seq();
+        self.pending_events.push(Event::OrderRejected {
+            seq,
+            instrument_id: self.instrument_id,
+            order_id,
+            reason,
+        });
+    }
+
+    fn emit_order_canceled(&mut self, order_id: OrderId, remaining_quantity: Quantity) {
+        let seq = self.next_event_seq();
+        self.pending_events.push(Event::OrderCanceled {
+            seq,
+            instrument_id: self.instrument_id,
+            order_id,
+            remaining_quantity,
+        });
+    }
+
+    fn emit_trade_executed(&mut self, trade: Trade) {
+        let seq = self.next_event_seq();
+        self.pending_events.push(Event::TradeExecuted {
+            seq,
+            instrument_id: self.instrument_id,
+            trade,
+        });
     }
 
     pub fn best_bid(&self) -> Option<Price> {
@@ -189,7 +278,7 @@ impl Orderbook {
                 let seq = self.next_trade_seq;
                 self.next_trade_seq = self.next_trade_seq.saturating_add(1);
 
-                trades.push(Trade::new(
+                let trade = Trade::new(
                     price,
                     quantity,
                     maker_order_id,
@@ -197,7 +286,9 @@ impl Orderbook {
                     maker_side,
                     instrument_id,
                     seq,
-                ));
+                );
+                trades.push(trade);
+                self.emit_trade_executed(trade);
                 self.on_order_matched(bid_price_val, quantity, bid_filled);
                 self.on_order_matched(ask_price_val, quantity, ask_filled);
             }
@@ -215,7 +306,14 @@ impl Orderbook {
         trades
     }
 
-    pub fn add_order(&mut self, mut order: Order) -> PlaceOrderResult {
+    pub fn add_order(&mut self, order: Order) -> PlaceOrderResult {
+        let before = self.top_of_book_snapshot();
+        let result = self.add_order_impl(order);
+        self.emit_top_of_book_if_changed(before);
+        result
+    }
+
+    fn add_order_impl(&mut self, mut order: Order) -> PlaceOrderResult {
         let order_id = order.order_id;
         let side = order.side();
         let mut price = order.price();
@@ -224,10 +322,12 @@ impl Orderbook {
         let is_immediate_or_cancel = matches!(order_type, OrderType::FillAndKill | OrderType::Market);
 
         if self.orders.contains_key(&order_id) {
+            self.emit_order_rejected(order_id, RejectReason::DuplicateOrderId);
             return Err(PlaceOrderReject::DuplicateOrderId);
         }
 
         if order_type == OrderType::PostOnly && self.can_match(side, price) {
+            self.emit_order_rejected(order_id, RejectReason::PostOnlyWouldTakeLiquidity);
             return Err(PlaceOrderReject::PostOnlyWouldTakeLiquidity);
         }
 
@@ -251,20 +351,24 @@ impl Orderbook {
                 }
             };
             if !converted {
+                self.emit_order_rejected(order_id, RejectReason::NoLiquidityForMarket);
                 return Err(PlaceOrderReject::NoLiquidityForMarket);
             }
             price = order.price();
         }
 
         if order_type == OrderType::FillAndKill && !self.can_match(side, price) {
+            self.emit_order_rejected(order_id, RejectReason::FillAndKillNoMatch);
             return Err(PlaceOrderReject::FillAndKillNoMatch);
         }
 
         if order_type == OrderType::FillOrKill && !self.can_fully_fill(side, price, quantity) {
+            self.emit_order_rejected(order_id, RejectReason::FillOrKillInsufficientLiquidity);
             return Err(PlaceOrderReject::FillOrKillInsufficientLiquidity);
         }
 
         self.orders.insert(order_id, order);
+        self.emit_order_accepted(order_id, side, price, quantity);
 
         match side {
             Side::Buy => {
@@ -286,23 +390,32 @@ impl Orderbook {
     }
 
     pub fn cancel_order(&mut self, order_id: OrderId) -> CancelOrderResult {
-        if !self.orders.contains_key(&order_id) {
-            return CancelOrderResult::NotFound;
-        }
-        self.cancel_order_internal(order_id);
-        CancelOrderResult::Cancelled
+        let before = self.top_of_book_snapshot();
+        let result = if self.orders.contains_key(&order_id) {
+            self.cancel_order_internal(order_id);
+            CancelOrderResult::Cancelled
+        } else {
+            CancelOrderResult::NotFound
+        };
+        self.emit_top_of_book_if_changed(before);
+        result
     }
 
     pub fn cancel_orders(&mut self, order_ids: OrderIds) -> CancelOrdersSummary {
+        let before = self.top_of_book_snapshot();
         let mut summary = CancelOrdersSummary::default();
         for order_id in order_ids {
-            match self.cancel_order(order_id) {
-                CancelOrderResult::Cancelled => summary.cancelled += 1,
-                CancelOrderResult::NotFound => summary.not_found += 1,
+            if self.orders.contains_key(&order_id) {
+                self.cancel_order_internal(order_id);
+                summary.cancelled += 1;
+            } else {
+                summary.not_found += 1;
             }
         }
+        self.emit_top_of_book_if_changed(before);
         summary
     }
+
     fn cancel_order_internal(&mut self, order_id: OrderId) {
         let Some(order) = self.orders.remove(&order_id) else { return };
 
@@ -322,20 +435,33 @@ impl Orderbook {
             }
         }
         self.on_order_cancelled(price, remaining);
+        self.emit_order_canceled(order_id, remaining);
     }
 
     pub fn modify_order(&mut self, order_modify: OrderModify) -> ModifyOrderResult {
+        let before = self.top_of_book_snapshot();
+        let result = self.modify_order_impl(order_modify);
+        self.emit_top_of_book_if_changed(before);
+        result
+    }
+
+    fn modify_order_impl(&mut self, order_modify: OrderModify) -> ModifyOrderResult {
         let Some(order) = self.orders.get(&order_modify.order_id()) else {
+            self.emit_order_rejected(order_modify.order_id(), RejectReason::OrderNotFound);
             return Err(ModifyOrderReject::OrderNotFound);
         };
         if order.side() != order_modify.side() {
+            self.emit_order_rejected(
+                order_modify.order_id(),
+                RejectReason::SideChangeNotAllowed,
+            );
             return Err(ModifyOrderReject::SideChangeNotAllowed);
         }
 
         let order_type = order.order_type();
 
         self.cancel_order_internal(order_modify.order_id());
-        self.add_order(order_modify.modify(order_type))
+        self.add_order_impl(order_modify.modify(order_type))
             .map(|success| ModifyOrderSuccess {
                 trades: success.trades,
             })

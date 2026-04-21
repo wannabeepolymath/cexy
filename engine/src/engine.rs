@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::commands::{
-    Command, CommandOutput, EngineError, InstrumentId,
+    Command, CommandOutput, EngineError, ExecuteResult, InstrumentId,
 };
 use crate::orderbook::level_info::OrderbookLevelInfo;
 use crate::orderbook::orderbook::Orderbook;
@@ -36,7 +36,7 @@ impl Engine {
         self.books.keys().copied()
     }
 
-    pub fn execute(&mut self, cmd: Command) -> Result<CommandOutput, EngineError> {
+    pub fn execute(&mut self, cmd: Command) -> Result<ExecuteResult, EngineError> {
         let instrument_id = cmd.instrument_id();
         let book = self
             .books
@@ -55,7 +55,8 @@ impl Engine {
                 CommandOutput::ModifyOrder(book.modify_order(modify))
             }
         };
-        Ok(output)
+        let events = book.drain_events();
+        Ok(ExecuteResult { output, events })
     }
 
     pub fn get_orderbook_state(&self, instrument_id: InstrumentId) -> Option<OrderbookLevelInfo> {

@@ -25,6 +25,7 @@ fn engine_place_order(engine: &mut Engine, order: Order) {
             order,
         })
         .expect("registered instrument routes")
+        .output
     {
         CommandOutput::PlaceOrder(result) => {
             result.expect("bench place_order must succeed");

@@ -2,6 +2,7 @@
 //!
 //! The order book no longer uses empty `Trades` as a silent rejection signal.
 
+use crate::events::Events;
 use crate::orderbook::order::Order;
 use crate::orderbook::order_modify::OrderModify;
 use crate::orderbook::trade::Trades;
@@ -69,6 +70,18 @@ pub enum CommandOutput {
     CancelOrder(CancelOrderResult),
     CancelOrders(CancelOrdersSummary),
     ModifyOrder(ModifyOrderResult),
+}
+
+/// Full return value of [`crate::engine::Engine::execute`]: the command's
+/// [`CommandOutput`] plus the ordered stream of [`crate::events::Event`]s it
+/// produced.
+///
+/// Events are not published anywhere yet; they are returned to the caller so
+/// the router/journal/market-data layers can consume them in a later phase.
+#[derive(Debug)]
+pub struct ExecuteResult {
+    pub output: CommandOutput,
+    pub events: Events,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
